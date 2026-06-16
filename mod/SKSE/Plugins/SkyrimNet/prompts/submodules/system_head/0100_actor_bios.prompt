@@ -1,0 +1,5 @@
+{% set pwExcluded = is_in_faction(player.UUID, "SkyrimNet_ActorBlacklistFaction") %}
+{{ render_character_profile("full", npc.UUID) }}
+{% if responseTarget and responseTarget.UUID != 0 and not (pwExcluded and responseTarget.type == "player") %}
+{{ render_character_profile("dialogue_target", responseTarget.UUID) }}
+{% endif %}{# end render mode check #}

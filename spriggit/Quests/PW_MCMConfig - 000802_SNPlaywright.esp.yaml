@@ -1,0 +1,27 @@
+FormKey: 000802:SNPlaywright.esp
+EditorID: PW_MCMConfig
+VirtualMachineAdapter:
+  FileName: ''
+  Scripts:
+  - Name: PW_MCM
+    Flags: Local
+    Properties: []
+  Aliases:
+  - Property:
+      Name: ''
+      Object: 000802:SNPlaywright.esp
+      Alias: 0
+    Scripts:
+    - Name: SKI_PlayerLoadGameAlias
+      Properties: []
+Flags:
+- StartGameEnabled
+- 0x10
+QuestFormVersion: 0
+NextAliasID: 1
+Aliases:
+- Name: PlayerAlias
+  Flags:
+  - AllowReserved
+  ForcedReference: 000014:Skyrim.esm
+  VoiceTypes: Null

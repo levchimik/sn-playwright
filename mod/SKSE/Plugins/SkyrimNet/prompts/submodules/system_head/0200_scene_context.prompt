@@ -1,0 +1,7 @@
+{% if exists("npc") and existsIn(npc, "UUID") and (is_in_faction(npc.UUID, "SkyrimNet_ActorBlacklistFaction") or is_in_faction(npc.UUID, "PW_AsleepFaction") or is_in_faction(npc.UUID, "PW_SleeptalkFaction")) %}
+You perceive nothing of your surroundings right now — no one is near you, and you can see and hear nothing of any events or conversations happening here.
+{% else if responseTarget %}
+{{ get_scene_context(npc.UUID, responseTarget.UUID, "full")}}
+{% else %}
+{{ get_scene_context(npc.UUID, 0, "full")}}
+{% endif %}

@@ -1,0 +1,9 @@
+# OS / editor cruft
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+*~
+
+# MO2 per-install metadata (not part of the mod itself)
+mod/meta.ini

@@ -1,0 +1,23 @@
+FormKey: 000800:SNPlaywright.esp
+EditorID: PW_DirectorQuest
+VirtualMachineAdapter:
+  FileName: ''
+  Aliases:
+  - Property:
+      Name: ''
+      Object: 000800:SNPlaywright.esp
+      Alias: 0
+    Scripts:
+    - Name: PW_Controller
+      Properties: []
+Flags:
+- StartGameEnabled
+- 0x10
+QuestFormVersion: 0
+NextAliasID: 1
+Aliases:
+- Name: PlayerAlias
+  Flags:
+  - AllowReserved
+  ForcedReference: 000014:Skyrim.esm
+  VoiceTypes: Null
