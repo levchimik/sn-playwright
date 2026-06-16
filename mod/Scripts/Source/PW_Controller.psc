@@ -131,12 +131,23 @@ EndFunction
 Event OnInit()
     RegisterKeys()
     RegisterDecorators()
+    RegisterPrismaEvents()
 EndEvent
 
 Event OnPlayerLoadGame()
     RegisterKeys()
     RegisterDecorators()
+    RegisterPrismaEvents()
 EndEvent
+
+; The PrismaUI panel lives in SNPlaywright.dll. It enumerates the nearby cast and
+; pushes it to the web view itself; we only need to receive the action payloads it
+; forwards. The DLL fires "PW_PrismaCommand" as a simple SKSE ModEvent (strArg =
+; "action|targetId|text") which this alias handles. Re-register every load -- mod
+; event registrations don't survive a reload.
+Function RegisterPrismaEvents()
+    RegisterForModEvent("PW_PrismaCommand", "OnPrismaCommand")
+EndFunction
 
 ; SkyrimNet decorators are runtime registrations that don't survive a reload, so
 ; (re)register them every load — same pattern SeverActions uses. These expose the
@@ -452,20 +463,28 @@ Function Narrate()
     If _textBusy
         Return
     EndIf
+    _textBusy = true
+    String narration = PromptText()
+    _textBusy = false
+    If narration != ""
+        NarrateText(narration, Game.GetCurrentCrosshairRef() as Actor)
+    EndIf
+EndFunction
+
+; Core. preferred = the NPC to voice it (crosshair, or the panel's selected
+; target); None falls back to a random nearby NPC. Reused by the panel.
+Function NarrateText(String narration, Actor preferred)
     Actor pl = Game.GetPlayer()
-    Actor speaker = Game.GetCurrentCrosshairRef() as Actor
+    Actor speaker = preferred
     Int tries = 0
     While (!speaker || speaker == pl) && tries < 6
         speaker = Game.FindRandomActorFromRef(pl, 1500.0)
         tries += 1
     EndWhile
     If !speaker || speaker == pl
-        Debug.Notification("No NPC nearby to perceive the narration - look at one")
+        Debug.Notification("No NPC nearby to perceive the narration")
         Return
     EndIf
-    _textBusy = true
-    String narration = PromptText()
-    _textBusy = false
     If narration != ""
         SkyrimNetApi.DirectNarration(narration, speaker, None)
         Debug.Notification("Narrated via " + speaker.GetDisplayName())
@@ -489,7 +508,12 @@ Function Say()
     _textBusy = true
     String line = PromptText()
     _textBusy = false
-    If line != ""
+    SayTo(t, line)
+EndFunction
+
+; Core (reused by the wheel/hotkey crosshair path and the PrismaUI panel).
+Function SayTo(Actor t, String line)
+    If t && line != ""
         SkyrimNetApi.RegisterDialogue(t, line)
         Debug.Notification(t.GetDisplayName() + " says it")
     EndIf
@@ -513,7 +537,12 @@ Function Think()
     _textBusy = true
     String thought = PromptText()
     _textBusy = false
-    If thought != ""
+    ThinkTo(t, thought)
+EndFunction
+
+; Core (reused by the wheel/hotkey crosshair path and the PrismaUI panel).
+Function ThinkTo(Actor t, String thought)
+    If t && thought != ""
         String data = "{\"npc_name\":\"" + SeverActionsNative.EscapeJsonString(t.GetDisplayName()) + "\",\"thoughts\":\"" + SeverActionsNative.EscapeJsonString(thought) + "\"}"
         SkyrimNetApi.RegisterEvent("npc_thoughts", data, t, None)
         Debug.Notification(t.GetDisplayName() + " thinks it")
@@ -537,7 +566,12 @@ Function Transform()
     _textBusy = true
     String line = PromptText()
     _textBusy = false
-    If line != ""
+    TransformTo(t, line)
+EndFunction
+
+; Core (reused by the wheel/hotkey crosshair path and the PrismaUI panel).
+Function TransformTo(Actor t, String line)
+    If t && line != ""
         SkyrimNetApi.DirectNarration(line, t, None)
         Debug.Notification(t.GetDisplayName() + " (transformed)")
     EndIf
@@ -553,8 +587,14 @@ EndFunction
 ; out / force-addressed. In Director Mode the player is blacklisted, so they're
 ; simply not part of that nearby audience — the same call works for both modes.
 Function PromptSpeak()
+    PromptActor(Game.GetCurrentCrosshairRef() as Actor)
+EndFunction
+
+; Core. preferred = the NPC to nudge (crosshair, or the panel's selected target);
+; None falls back to a random nearby NPC. Reused by the panel.
+Function PromptActor(Actor preferred)
     Actor pl = Game.GetPlayer()
-    Actor speaker = Game.GetCurrentCrosshairRef() as Actor
+    Actor speaker = preferred
     Int tries = 0
     While (!speaker || speaker == pl) && tries < 6
         speaker = Game.FindRandomActorFromRef(pl, 1500.0)
@@ -687,4 +727,151 @@ Function OpenWheel()
     ElseIf sel == 3
         AsleepCrosshair()
     EndIf
+EndFunction
+
+; ------------------------------------------------------------------ PrismaUI panel
+; Action payload from SNPlaywright.dll: "action|targetId|text".
+;   targetId: "player", a "0x"-prefixed runtime FormID, or "" (no target).
+;   text: free text (may itself contain '|', so it's everything after field 2).
+; Actions map onto the same cores the wheel/hotkeys use, so behaviour is identical.
+Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akSender)
+    String action = PipeField(strArg, 0)
+    String targetTok = PipeField(strArg, 1)
+    String text = PipeRest(strArg, 2)
+    Actor t = ResolveTarget(targetTok)
+    Actor pl = Game.GetPlayer()
+
+    If action == "director"
+        ToggleDirector()
+    ElseIf action == "prompt"
+        PromptActor(t)
+    ElseIf action == "narrate"
+        NarrateText(text, t)
+    ElseIf action == "say"
+        If t && t != pl
+            SayTo(t, text)
+        EndIf
+    ElseIf action == "transform"
+        If t && t != pl
+            TransformTo(t, text)
+        EndIf
+    ElseIf action == "think"
+        If t && t != pl
+            ThinkTo(t, text)
+        EndIf
+    ElseIf action == "sleep"
+        If t
+            PrismaSleep(t)
+        EndIf
+    ElseIf action == "sleeptalk"
+        If t
+            PrismaSleeptalk(t)
+        EndIf
+    ElseIf action == "wake"
+        If t
+            PrismaWake(t)
+        EndIf
+    EndIf
+EndFunction
+
+; Idempotent sleep-state setters for the panel (the wheel/hotkey path toggles;
+; the panel has explicit Deep Sleep / Sleep-talk / Wake buttons). They lean on the
+; existing toggles so all the deaf-window / walk-to-bed / mutual-exclusion logic is
+; shared and there's one source of truth.
+Function PrismaSleep(Actor t)
+    Faction slf = GetAsleepFaction()
+    If slf && !t.IsInFaction(slf)
+        ToggleAsleepActor(t)   ; awake/sleep-talk -> deep sleep
+    EndIf
+EndFunction
+
+Function PrismaSleeptalk(Actor t)
+    Faction stf = GetSleeptalkFaction()
+    If stf && !t.IsInFaction(stf)
+        ToggleSleeptalkActor(t)   ; awake/deep-sleep -> sleep-talk
+    EndIf
+EndFunction
+
+Function PrismaWake(Actor t)
+    Faction slf = GetAsleepFaction()
+    Faction stf = GetSleeptalkFaction()
+    If slf && t.IsInFaction(slf)
+        ToggleAsleepActor(t)      ; wakes
+    ElseIf stf && t.IsInFaction(stf)
+        ToggleSleeptalkActor(t)   ; wakes
+    EndIf
+EndFunction
+
+; "player" -> the player; "0x...." -> resolve the runtime FormID (SKSE GetFormEx
+; handles the full unsigned 32-bit range, incl. ESL FE.. ids); "" -> None.
+Actor Function ResolveTarget(String token)
+    If token == ""
+        Return None
+    EndIf
+    If token == "player" || token == "Player"
+        Return Game.GetPlayer()
+    EndIf
+    Return Game.GetFormEx(HexToInt(token)) as Actor
+EndFunction
+
+; Parse a "0x"-prefixed (or bare) hex string to an Int. Two's-complement wrap is
+; intentional: FormIDs above 0x7FFFFFFF come back as a negative Int whose bit
+; pattern still equals the FormID, which is exactly what GetFormEx wants.
+Int Function HexToInt(String s)
+    If StringUtil.GetLength(s) >= 2 && StringUtil.SubString(s, 0, 2) == "0x"
+        s = StringUtil.SubString(s, 2)
+    EndIf
+    String lower = "0123456789abcdef"
+    String upper = "0123456789ABCDEF"
+    Int val = 0
+    Int i = 0
+    Int n = StringUtil.GetLength(s)
+    While i < n
+        String ch = StringUtil.SubString(s, i, 1)
+        Int d = StringUtil.Find(lower, ch)
+        If d < 0
+            d = StringUtil.Find(upper, ch)
+        EndIf
+        If d >= 0
+            val = val * 16 + d
+        EndIf
+        i += 1
+    EndWhile
+    Return val
+EndFunction
+
+; Nth '|'-delimited field (0-indexed); "" if absent.
+String Function PipeField(String data, Int index)
+    Int pos = 0
+    Int field = 0
+    Int len = StringUtil.GetLength(data)
+    While field < index && pos < len
+        Int p = StringUtil.Find(data, "|", pos)
+        If p < 0
+            Return ""
+        EndIf
+        pos = p + 1
+        field += 1
+    EndWhile
+    Int nextP = StringUtil.Find(data, "|", pos)
+    If nextP < 0
+        Return StringUtil.SubString(data, pos)
+    EndIf
+    Return StringUtil.SubString(data, pos, nextP - pos)
+EndFunction
+
+; Everything from the Nth field onward (so trailing text keeps any '|' it contains).
+String Function PipeRest(String data, Int index)
+    Int pos = 0
+    Int field = 0
+    Int len = StringUtil.GetLength(data)
+    While field < index && pos < len
+        Int p = StringUtil.Find(data, "|", pos)
+        If p < 0
+            Return ""
+        EndIf
+        pos = p + 1
+        field += 1
+    EndWhile
+    Return StringUtil.SubString(data, pos)
 EndFunction

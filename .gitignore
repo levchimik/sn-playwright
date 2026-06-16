@@ -7,3 +7,6 @@ desktop.ini
 
 # MO2 per-install metadata (not part of the mod itself)
 mod/meta.ini
+
+# FOMOD build output (regenerated from mod/ on demand)
+dist/

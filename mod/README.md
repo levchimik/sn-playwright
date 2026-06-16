@@ -1,4 +1,4 @@
-# Playwright — v0.5
+# Playwright — v0.6
 
 A scene-control / NPC-puppeteering toolkit for **SkyrimNet**. Direct who's "in" a
 scene, narrate it, and put words (and thoughts, and sleep) into your cast — like a
@@ -7,6 +7,12 @@ playwright running a live table read.
 > Formerly "SkyrimNet Director Mode" (the `SND_` prefix). Renamed to Playwright
 > (`PW_` prefix, plugin `SNPlaywright.esp`) once it grew past the original
 > leave-the-scene feature.
+
+**v0.6** adds a **PrismaUI control panel** (`SNPlaywright.dll`): an on-screen panel
+with a live nearby-NPC list and the full action set as buttons + a roomy text box —
+no crosshair aiming, no cramped UIExtensions input, multi-word names just work. The
+wheel + MCM hotkeys still work exactly as before; the panel is an alternative
+surface, not a replacement.
 
 ## Actions
 
@@ -25,6 +31,24 @@ Deep Sleep / Sleep-talk also work **on the player** (Self), and a woken actor
 permanently "forgets" what was said while they were out (a per-actor deaf-window
 stored in the co-save, exposed to prompts via the `pw_deaf_start`/`pw_deaf_end`
 decorators).
+
+## The PrismaUI panel (v0.6)
+
+Press the panel key (**F11** by default; rebind in
+`SKSE/Plugins/SNPlaywright.ini` → `[Controls] ToggleKey`, a DXScanCode) to open a
+left-side panel. It lists the nearby cast (distance-sorted, with **asleep** /
+**murmuring** badges) plus a **(you)** row at the top. Click a name to target it,
+type into the text box, and hit an action: **Say / Transform / Think / Prompt /
+Narrate / Deep Sleep / Sleep-talk / Wake**, plus a **Director** toggle in the
+header. Buttons grey out until their needs are met (a target and/or text). Escape or
+the ✕ closes it.
+
+How it works: `SNPlaywright.dll` (a thin CommonLibSSE-NG SKSE plugin) owns the
+PrismaUI view, enumerates the cast itself, and forwards button clicks to
+`PW_Controller` as the `PW_PrismaCommand` SKSE ModEvent — every action runs through
+the *same* Papyrus cores the wheel/hotkeys use, so behaviour is identical. **Needs
+the Prisma UI framework**; without it the DLL no-ops and the wheel/hotkeys still
+work.
 
 ## The wheel (UIWheelMenu radial, 8 slots)
 
@@ -62,7 +86,8 @@ modifier* is on. The MCM also exposes **Send to bed (while sleeping)** and
 ## Dependencies
 
 SkyrimNet, SKSE, UIExtensions (wheel + text entry), PapyrusUtil (StorageUtil), and
-SeverActions (walk-to-bed + JSON helper).
+SeverActions (walk-to-bed + JSON helper). The v0.6 panel additionally needs the
+**Prisma UI** framework — optional; skip it and the wheel/hotkeys cover everything.
 
 ## Install
 
