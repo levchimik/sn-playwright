@@ -7,6 +7,7 @@ PW_Controller _ctrl
 
 ; cached option IDs (Controls page)
 Int _oiWheel
+Int _oiPrisma
 Int _oiToggle
 Int _oiNarrate
 Int _oiPrompt
@@ -79,6 +80,7 @@ Function OnPageReset(String page)
         SetCursorFillMode(TOP_TO_BOTTOM)
         AddHeaderOption("Hotkeys", 0)
         _oiWheel      = AddKeyMapOption("Open Wheel", c.WheelKey, 0)
+        _oiPrisma     = AddKeyMapOption("Open PrismaUI Panel", c.PrismaKey, 0)
         _oiToggle     = AddKeyMapOption("Toggle Director Mode", c.ToggleKey, 0)
         _oiNarrate    = AddKeyMapOption("Narrate (text)", c.NarrateKey, 0)
         _oiPrompt     = AddKeyMapOption("Prompt to Speak (no text)", c.PromptKey, 0)
@@ -128,6 +130,8 @@ Function OnOptionKeyMapChange(Int option, Int keyCode, String conflictControl, S
 
     If option == _oiWheel
         c.WheelKey = keyCode
+    ElseIf option == _oiPrisma
+        c.PrismaKey = keyCode
     ElseIf option == _oiToggle
         c.ToggleKey = keyCode
     ElseIf option == _oiNarrate
@@ -235,6 +239,8 @@ Function OnOptionHighlight(Int option)
         SetInfoText("Chance (0-1) that a nearby sleep-talker murmurs on each check. Lower = sparser. Default 0.35. Each murmur costs one LLM + voice generation.")
     ElseIf option == _oiWheel
         SetInfoText("Opens the radial wheel: Enter/Exit Scene, Narrate, Sleep/Wake crosshair NPC.")
+    ElseIf option == _oiPrisma
+        SetInfoText("Opens the PrismaUI control panel: nearby-NPC list + action buttons + text box. Needs SNPlaywright.dll and the Prisma UI framework. (An optional hardcoded fallback key can be set in SNPlaywright.ini; off by default.)")
     ElseIf option == _oiToggle
         SetInfoText("Director Mode: removes you from the scene so nearby NPCs talk among themselves.")
     ElseIf option == _oiNarrate

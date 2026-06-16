@@ -17,6 +17,7 @@ Int Property AsleepKey       = -1 Auto ; toggle Deep Sleep (unconscious) on cros
 Int Property AsleepSelfKey   = -1 Auto ; toggle Deep Sleep on yourself
 Int Property SleeptalkKey    = -1 Auto ; toggle Sleep-talk (deaf, but murmurs) on crosshair NPC
 Int Property SleeptalkSelfKey = -1 Auto ; toggle Sleep-talk on yourself
+Int Property PrismaKey        = -1 Auto ; open/close the PrismaUI panel (needs SNPlaywright.dll + Prisma UI)
 
 ; --- Modifier arming gate. ---
 Int  Property ModifierKey     = 42 Auto    ; DXScanCode held to arm SND keys (42 = LShift; -1/0 = none)
@@ -215,15 +216,25 @@ Function RegisterKeys()
     If SleeptalkSelfKey > 0
         RegisterForKey(SleeptalkSelfKey)
     EndIf
+    If PrismaKey > 0
+        RegisterForKey(PrismaKey)
+    EndIf
 EndFunction
 
 Event OnKeyDown(Int keyCode)
-    If Utility.IsInMenuMode()
-        Return
-    EndIf
     ; Modifier arming gate (SeverActions pattern): swallow the key unless the
     ; configured modifier is currently held.
     If RequireModifier && ModifierKey > 0 && !Input.IsKeyPressed(ModifierKey)
+        Return
+    EndIf
+    ; The panel toggle must fire even while the panel is OPEN (which puts the game
+    ; in menu mode), so it is handled BEFORE the menu-mode guard below -- otherwise
+    ; the combo could open the panel but never close it.
+    If keyCode == PrismaKey
+        TogglePrismaPanel()
+        Return
+    EndIf
+    If Utility.IsInMenuMode()
         Return
     EndIf
     If keyCode == WheelKey
@@ -251,6 +262,13 @@ Event OnKeyDown(Int keyCode)
     EndIf
 EndEvent
 
+; Ask SNPlaywright.dll to open/close the PrismaUI panel. The DLL listens for this
+; simple SKSE ModEvent (its C++ ModCallbackEvent sink). No-op if the DLL/Prisma UI
+; isn't installed. Lets the panel key live in the MCM like every other binding.
+Function TogglePrismaPanel()
+    SendModEvent("PW_PrismaToggle", "", 0.0)
+EndFunction
+
 ; ------------------------------------------------------------------ status
 Bool Function IsDirectorOn()
     Faction blf = GetBlacklistFaction()
@@ -272,12 +290,14 @@ Function ToggleDirector()
             SkyrimNetApi.PatchConfig("PlayerDialogue", "{\"enabled\": true}")
         EndIf
         Debug.Notification("Director Mode: OFF")
+        SendModEvent("PW_PrismaDirector", "", 0.0)
     Else
         ; --- Director Mode ON: leave the scene ---
         pl.AddToFaction(blf)
         _pdWasEnabled = SkyrimNetApi.GetConfigBool("PlayerDialogue", "enabled", true)
         SkyrimNetApi.PatchConfig("PlayerDialogue", "{\"enabled\": false}")
         Debug.Notification("Director Mode: ON - you have left the scene")
+        SendModEvent("PW_PrismaDirector", "", 1.0)
     EndIf
 EndFunction
 

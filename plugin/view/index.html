@@ -17,13 +17,38 @@
     --danger:#c75c5c;
   }
   *{box-sizing:border-box;user-select:none;font-family:"Segoe UI",sans-serif;}
-  html,body{margin:0;height:100%;background:transparent;overflow:hidden;color:var(--fg);}
+  /* Empty areas are click-through so the always-shown view never eats game input;
+     only the panel and the dot are interactive. */
+  html,body{margin:0;height:100%;background:transparent;overflow:hidden;color:var(--fg);pointer-events:none;}
   #panel{
     position:fixed;top:0;left:0;height:100%;width:440px;
     background:var(--bg);backdrop-filter:blur(6px);
     border-right:1px solid var(--line);
     display:flex;flex-direction:column;
     box-shadow:4px 0 24px rgba(0,0,0,0.5);
+    pointer-events:auto;
+  }
+  #panel:focus{outline:none;}
+  /* Invisible key-catcher: CEF only routes keystrokes to the page when an
+     editable input is focused, so we keep this focused (not the text box, which
+     would auto-pause) to receive Escape. Same trick SkyrimNet uses with its input. */
+  #kc{position:fixed;top:-200px;left:-200px;width:1px;height:1px;opacity:0;border:0;padding:0;}
+
+  /* Corner dot widget: visible whenever the panel is collapsed; draggable while
+     the panel is open (the view only receives mouse input when focused). */
+  #dot{
+    position:fixed;left:480px;top:24px;width:16px;height:16px;border-radius:50%;
+    background:#e02020;border:2px solid rgba(0,0,0,0.55);
+    cursor:grab;pointer-events:auto;z-index:9999;display:none;
+  }
+  /* Visible only in Director Mode -- a red "recording" light. */
+  #dot.on{display:block;animation:recpulse 1.4s ease-in-out infinite;}
+  #dot.grabbing{cursor:grabbing;}
+  body.open #dot.on{opacity:0.6;}     /* dimmed while the panel is open = draggable */
+  body:not(.open) #panel{display:none;}
+  @keyframes recpulse{
+    0%,100%{box-shadow:0 0 6px 2px rgba(224,32,32,0.95);}
+    50%{box-shadow:0 0 11px 4px rgba(224,32,32,0.45);}
   }
   header{
     display:flex;align-items:center;gap:10px;
@@ -38,6 +63,20 @@
   .pill.on{color:#1a1a1a;background:var(--accent);border-color:var(--accent);font-weight:600;}
   .closebtn{cursor:pointer;color:var(--muted);font-size:18px;line-height:1;padding:2px 6px;}
   .closebtn:hover{color:var(--fg);}
+
+  .dir-banner{
+    display:none;
+    align-items:center;gap:8px;
+    background:linear-gradient(90deg,rgba(201,161,74,0.95),rgba(201,161,74,0.65));
+    color:#1a1a1a;font-weight:700;font-size:12px;letter-spacing:1.2px;
+    padding:8px 16px;text-transform:uppercase;
+  }
+  .dir-banner .dot{width:8px;height:8px;border-radius:50%;background:#1a1a1a;
+    box-shadow:0 0 0 0 rgba(26,26,26,0.6);animation:pulse 1.6s infinite;}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(26,26,26,0.5);}70%{box-shadow:0 0 0 6px rgba(26,26,26,0);}100%{box-shadow:0 0 0 0 rgba(26,26,26,0);}}
+  /* Director-on: gold left edge + glow so the whole panel reads "you're out of scene". */
+  #panel.director{border-left:4px solid var(--accent);box-shadow:4px 0 24px rgba(201,161,74,0.35);}
+  #panel.director .title{color:var(--accent);}
 
   .section-label{font-size:10px;letter-spacing:1.5px;color:var(--muted);padding:10px 16px 4px;text-transform:uppercase;}
 
@@ -82,12 +121,16 @@
 </style>
 </head>
 <body>
-<div id="panel">
+<input id="kc" type="text" autocomplete="off" aria-hidden="true" />
+<div id="panel" tabindex="-1">
   <header>
     <div class="title">PLAYWRIGHT<small>scene control</small></div>
     <div id="dirPill" class="pill" onclick="toggleDirector()">Director: off</div>
+    <div id="pausePill" class="pill" onclick="togglePause()">Pause: off</div>
     <div class="closebtn" onclick="closePanel()">&#10005;</div>
   </header>
+
+  <div id="dirBanner" class="dir-banner"><span class="dot"></span>Director Mode &mdash; you've left the scene</div>
 
   <div class="section-label">Nearby cast &mdash; click to target</div>
   <div id="npcs"><div class="empty">Loading nearby people&hellip;</div></div>
@@ -108,17 +151,33 @@
   </footer>
 </div>
 
+<div id="dot" title="Playwright"></div>
+
 <script>
-  // PrismaUI RegisterJSListener targets. These stubs MUST exist before use --
-  // PrismaUI replaces each with a native binding once the view is registered.
-  // (Same pattern SkyrimNet's app.js uses for window.skyrimnet.) Without the
-  // pre-declared namespace, the existence guards below are always false and no
-  // command ever reaches C++.
-  window.playwright = window.playwright || {
-    command: function(){}, close: function(){}, ready: function(){}, refresh: function(){}
+  // PrismaUI RegisterJSListener targets are FLAT globals (window.pwCommand, ...).
+  // PrismaUI binds them natively once the view is registered; these stubs just
+  // guarantee the calls never throw if a click lands before binding completes.
+  window.pwCommand = window.pwCommand || function(){};
+  window.pwClose   = window.pwClose   || function(){};
+  window.pwRefresh = window.pwRefresh || function(){};
+  window.pwConfig  = window.pwConfig  || function(){};
+
+  // Called by C++ (InteropCall) to expand the full panel or collapse to the dot.
+  window.pwSetOpen = function(v){
+    var open = (v==="1"||v===1||v===true);
+    document.body.className = open ? "open" : "";
+    // Keep the invisible key-catcher input focused so the page receives keystrokes
+    // (notably Escape) without the text box's auto-pause.
+    if(open){ try{ document.getElementById("kc").focus(); }catch(e){} }
   };
 
-  var state = { npcs:[], target:null, targetName:"none", director:false };
+  // Called by C++ whenever Director Mode changes (and on load). The corner dot
+  // is the red "recording" light -- shown only while Director Mode is on.
+  window.pwSetDirector = function(v){
+    document.getElementById("dot").classList.toggle("on", (v==="1"||v===1||v===true));
+  };
+
+  var state = { npcs:[], target:null, targetName:"none", director:false, pause:false };
 
   // ---- C++ -> JS : push nearby-NPC data (called via InteropCall) ----
   window.pwSetData = function(json){
@@ -126,6 +185,7 @@
       var d = (typeof json === "string") ? JSON.parse(json) : json;
       state.npcs = d.npcs || [];
       state.director = !!d.directorMode;
+      state.pause = !!d.pauseGame;
       // keep selection if the target is still present
       if(state.target && !state.npcs.some(function(n){return n.id===state.target;})){
         state.target = null; state.targetName = "none";
@@ -138,6 +198,15 @@
     var dir = document.getElementById("dirPill");
     dir.textContent = "Director: " + (state.director ? "on" : "off");
     dir.className = "pill" + (state.director ? " on" : "");
+    document.getElementById("dirBanner").style.display = state.director ? "flex" : "none";
+    document.getElementById("panel").className = state.director ? "director" : "";
+    // The dot's visibility is driven by pwSetDirector (live, even when collapsed);
+    // keep it in sync here too when we have fresh panel data.
+    document.getElementById("dot").classList.toggle("on", state.director);
+
+    var pp = document.getElementById("pausePill");
+    pp.textContent = "Pause: " + (state.pause ? "on" : "off");
+    pp.className = "pill" + (state.pause ? " on" : "");
 
     var box = document.getElementById("npcs");
     box.innerHTML = "";
@@ -201,29 +270,60 @@
   }
 
   function scheduleRefresh(){
-    setTimeout(function(){
-      if(window.playwright && window.playwright.refresh) window.playwright.refresh("");
-    }, 450);
+    setTimeout(function(){ window.pwRefresh(""); }, 450);
   }
 
-  function closePanel(){
-    if(window.playwright && window.playwright.close) window.playwright.close("");
+  function togglePause(){
+    state.pause = !state.pause;          // optimistic; next push confirms
+    render();
+    window.pwConfig("pause|" + (state.pause ? "1" : "0"));
   }
+
+  function closePanel(){ window.pwClose(""); }
 
   // ---- JS -> C++ : send a command ----
-  function send(payload){
-    if(window.playwright && window.playwright.command) window.playwright.command(payload);
-  }
+  function send(payload){ window.pwCommand(payload); }
 
   function esc(s){ return (s||"").replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];}); }
 
-  document.getElementById("text").addEventListener("input", refreshButtons);
-  document.addEventListener("keydown", function(e){ if(e.key==="Escape") closePanel(); });
+  var textBox = document.getElementById("text");
+  textBox.addEventListener("input", refreshButtons);
+  // Auto-pause while the text box is focused so keystrokes don't leak to other
+  // mods' hotkeys (e.g. pressing 'n' while typing). Resumes on blur / close.
+  textBox.addEventListener("focus", function(){ window.pwConfig("typing|1"); });
+  textBox.addEventListener("blur",  function(){ window.pwConfig("typing|0"); });
+  // ---- corner dot: restore saved position + free drag (while panel focused) ----
+  var dot = document.getElementById("dot");
+  try{
+    var dp = JSON.parse(localStorage.getItem("pwDotPos") || "null");
+    if(dp){ dot.style.left = dp.x + "px"; dot.style.top = dp.y + "px"; }
+  }catch(e){}
+  (function(){
+    var dragging=false, ox=0, oy=0;
+    dot.addEventListener("pointerdown", function(e){
+      dragging=true; ox=e.clientX-dot.offsetLeft; oy=e.clientY-dot.offsetTop;
+      dot.classList.add("grabbing");
+      try{ dot.setPointerCapture(e.pointerId); }catch(_){}
+      e.preventDefault();
+    });
+    dot.addEventListener("pointermove", function(e){
+      if(!dragging) return;
+      dot.style.left=(e.clientX-ox)+"px"; dot.style.top=(e.clientY-oy)+"px";
+    });
+    dot.addEventListener("pointerup", function(){
+      if(!dragging) return; dragging=false; dot.classList.remove("grabbing");
+      try{ localStorage.setItem("pwDotPos", JSON.stringify({x:dot.offsetLeft, y:dot.offsetTop})); }catch(_){}
+    });
+  })();
 
-  // Tell C++ we're ready so it pushes the initial list.
-  window.addEventListener("DOMContentLoaded", function(){
-    if(window.playwright && window.playwright.ready) window.playwright.ready("");
-  });
+  // Escape is driven by the DLL (the game doesn't deliver Escape to PrismaUI
+  // views). When typing, the DLL calls pwBlurText to exit the box (1st Escape);
+  // otherwise it collapses the panel directly (2nd Escape / not typing).
+  window.pwBlurText = function(){
+    try{ textBox.blur(); document.getElementById("kc").focus(); }catch(_){}
+  };
+  // Initial data arrives when the panel is opened (C++ pushes on toggle), so no
+  // JS->C++ "ready" ping is needed here.
 </script>
 </body>
 </html>

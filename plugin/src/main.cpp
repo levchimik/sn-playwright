@@ -1,5 +1,4 @@
 #include "PrismaUI_API.h"
-#include <keyhandler/keyhandler.h>
 
 #include <algorithm>
 #include <string>
@@ -28,9 +27,17 @@ namespace
     RE::TESFaction* g_facSleeptalk = nullptr;  // PW_SleeptalkFaction 0x803 SNPlaywright.esp
     RE::TESFaction* g_facBlacklist = nullptr;  // SkyrimNet ActorBlacklistFaction 0x12DB SkyrimNet.esp
 
+    bool     g_pauseGame = false;   // manual "Pause" pill, persisted (ini [Behavior] PauseGame)
+    bool     g_typing = false;      // transient: the panel's text box currently has focus
+    bool     g_appliedPause = false;// pause value currently in effect on the live view
+    uint64_t g_reapplyTick = 0;     // when we last ran an Unfocus->Focus cycle (loop guard)
+
+    bool EffectivePause() { return g_pauseGame || g_typing; }
+
     constexpr const char* EVT_COMMAND = "PW_PrismaCommand";  // DLL -> Papyrus (action payload)
     constexpr float       MAX_UNITS = 4096.0f;               // ~58 m search radius
     constexpr float       UNITS_PER_M = 70.0f;
+    constexpr const char* INI_PATH = "Data\\SKSE\\Plugins\\SNPlaywright.ini";
 
     // ---- Send the action payload to Papyrus on the main thread ----
     void SendCommandToPapyrus(std::string a_payload)
@@ -89,6 +96,21 @@ namespace
         g_facAsleep = dh->LookupForm<RE::TESFaction>(0x801, "SNPlaywright.esp");
         g_facSleeptalk = dh->LookupForm<RE::TESFaction>(0x803, "SNPlaywright.esp");
         g_facBlacklist = dh->LookupForm<RE::TESFaction>(0x12DB, "SkyrimNet.esp");
+    }
+
+    bool IsDirectorOn()
+    {
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        return pc && g_facBlacklist && pc->IsInFaction(g_facBlacklist);
+    }
+
+    void PushDirector(bool a_on)
+    {
+        SKSE::GetTaskInterface()->AddTask([a_on]() {
+            if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
+                g_prisma->InteropCall(g_view, "pwSetDirector", a_on ? "1" : "0");
+            }
+        });
     }
 
     struct NpcEntry
@@ -153,6 +175,8 @@ namespace
 
         std::string json = "{\"directorMode\":";
         json += director ? "true" : "false";
+        json += ",\"pauseGame\":";
+        json += g_pauseGame ? "true" : "false";
         json += ",\"npcs\":[";
         // Player first -- selectable target for Deep Sleep / Sleep-talk (Self).
         {
@@ -199,20 +223,137 @@ namespace
         });
     }
 
+    // Re-apply the focus with the current effective pause flag. PrismaUI only
+    // honours pauseGame at the moment focus is (re)acquired, so changing it live
+    // requires an Unfocus -> Focus cycle (a plain re-Focus is a no-op). CEF keeps
+    // the DOM's focused element across this, so the text box stays typeable.
+    void ReapplyPause()
+    {
+        SKSE::GetTaskInterface()->AddTask([]() {
+            if (!(g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view) &&
+                  g_prisma->HasFocus(g_view))) {
+                return;
+            }
+            // Nothing to do if the effective pause isn't actually changing -- e.g.
+            // focusing the text box while the pill already paused the game. Avoids
+            // a pointless (and visible) Unfocus->Focus cycle.
+            if (EffectivePause() == g_appliedPause) {
+                return;
+            }
+            // Unfocus blurs the DOM text box and re-Focus refocuses it, each firing
+            // a JS focus/blur. Stamp the time so OnJsConfig can ignore those
+            // self-inflicted echoes (else pausing thrashes).
+            g_reapplyTick = GetTickCount64();
+            g_appliedPause = EffectivePause();
+            g_prisma->Unfocus(g_view);
+            g_prisma->Focus(g_view, g_appliedPause);
+        });
+    }
+
     void ToggleMenu()
     {
         if (!g_prisma || !g_viewReady.load() || !g_prisma->IsValid(g_view)) {
             return;
         }
         if (g_prisma->HasFocus(g_view)) {
+            g_typing = false;  // closing clears the transient typing-pause
+            g_appliedPause = false;
             g_prisma->Unfocus(g_view);
-            g_prisma->Hide(g_view);
+            g_prisma->InteropCall(g_view, "pwSetOpen", "0");  // collapse to dot
         } else {
-            g_prisma->Show(g_view);
-            g_prisma->Focus(g_view);
+            g_appliedPause = EffectivePause();
+            g_prisma->Focus(g_view, g_appliedPause);
+            g_prisma->InteropCall(g_view, "pwSetOpen", "1");  // expand panel
             PushData();
         }
     }
+
+    // ---- ModEvent sink: Papyrus -> DLL (the MCM-bound key fires PW_PrismaToggle) ----
+    class PrismaModEventSink : public RE::BSTEventSink<SKSE::ModCallbackEvent>
+    {
+    public:
+        static PrismaModEventSink* GetSingleton()
+        {
+            static PrismaModEventSink instance;
+            return &instance;
+        }
+        RE::BSEventNotifyControl ProcessEvent(const SKSE::ModCallbackEvent* a_event,
+                                              RE::BSTEventSource<SKSE::ModCallbackEvent>*) override
+        {
+            if (a_event) {
+                const std::string nm = a_event->eventName.c_str();
+                if (nm == "PW_PrismaToggle") {
+                    SKSE::GetTaskInterface()->AddTask([]() { ToggleMenu(); });
+                } else if (nm == "PW_PrismaDirector") {
+                    PushDirector(a_event->numArg >= 0.5f);  // recording dot on/off
+                }
+            }
+            return RE::BSEventNotifyControl::kContinue;
+        }
+
+    private:
+        PrismaModEventSink() = default;
+    };
+
+    void CollapseFromCode()  // close the panel from C++ (main thread)
+    {
+        SKSE::GetTaskInterface()->AddTask([]() {
+            if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
+                g_typing = false;
+                g_appliedPause = false;
+                g_prisma->Unfocus(g_view);
+                g_prisma->InteropCall(g_view, "pwSetOpen", "0");
+            }
+        });
+    }
+
+    // ---- Escape handling ----
+    // PrismaUI views don't get Escape on their own (the game claims it), so we
+    // watch the raw input stream while the panel is focused. Observe-only: if
+    // typing, the first Escape just exits the text box (via the view); otherwise
+    // it closes the panel.
+    class EscInputSink : public RE::BSTEventSink<RE::InputEvent*>
+    {
+    public:
+        static EscInputSink* GetSingleton()
+        {
+            static EscInputSink instance;
+            return &instance;
+        }
+        RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_events,
+                                              RE::BSTEventSource<RE::InputEvent*>*) override
+        {
+            if (!a_events || !g_prisma || !g_viewReady.load() || !g_prisma->IsValid(g_view) ||
+                !g_prisma->HasFocus(g_view)) {
+                return RE::BSEventNotifyControl::kContinue;
+            }
+            for (auto* e = *a_events; e; e = e->next) {
+                if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) {
+                    continue;
+                }
+                auto* be = e->AsButtonEvent();
+                if (!be || be->device.get() != RE::INPUT_DEVICE::kKeyboard) {
+                    continue;
+                }
+                if (be->GetIDCode() == 0x01 /* DIK_ESCAPE */ && be->IsDown()) {
+                    if (g_typing) {
+                        // First Escape: exit the text box (the view blurs + unpauses).
+                        SKSE::GetTaskInterface()->AddTask([]() {
+                            if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
+                                g_prisma->InteropCall(g_view, "pwBlurText", "");
+                            }
+                        });
+                    } else {
+                        CollapseFromCode();
+                    }
+                }
+            }
+            return RE::BSEventNotifyControl::kContinue;
+        }
+
+    private:
+        EscInputSink() = default;
+    };
 
     // ---- JS listener callbacks (free functions: no captures) ----
     void OnJsCommand(const char* a_arg)
@@ -223,22 +364,64 @@ namespace
 
     void OnJsClose(const char*)
     {
-        if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
-            g_prisma->Unfocus(g_view);
-            g_prisma->Hide(g_view);
+        // Runs on the CEF/JS thread. Marshal to the main thread before touching the
+        // view -- calling Unfocus off-thread glitches the player's run/walk state
+        // (that's why the X button flipped walk mode but the combo, which already
+        // routes through the main thread, did not).
+        SKSE::GetTaskInterface()->AddTask([]() {
+            if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
+                g_typing = false;
+                g_appliedPause = false;
+                g_prisma->Unfocus(g_view);
+                g_prisma->InteropCall(g_view, "pwSetOpen", "0");  // collapse to dot
+            }
+        });
+    }
+
+    void OnJsRefresh(const char*) { PushData(); }
+
+    // Live settings from the panel. arg = "key|value", e.g. "pause|1".
+    // Pure C++ state (no Papyrus involved); applied live + persisted to the ini.
+    void OnJsConfig(const char* a_arg)
+    {
+        if (!a_arg) {
+            return;
+        }
+        std::string s = a_arg;
+        auto bar = s.find('|');
+        if (bar == std::string::npos) {
+            return;
+        }
+        const std::string key = s.substr(0, bar);
+        const std::string val = s.substr(bar + 1);
+        const bool on = (val == "1" || val == "true");
+        if (key == "pause") {
+            // Manual pill -- persisted.
+            g_pauseGame = on;
+            WritePrivateProfileStringA("Behavior", "PauseGame", g_pauseGame ? "1" : "0", INI_PATH);
+            logger::info("Config pause(pill) -> {}", g_pauseGame);
+            ReapplyPause();
+        } else if (key == "typing") {
+            // Text box gained/lost focus -- transient auto-pause so keystrokes
+            // don't leak to other mods' hotkeys while composing a line.
+            // Ignore the focus/blur echo from our own Unfocus->Focus cycle, or the
+            // pause state would thrash (blur->unpause->focus->pause->...).
+            if (GetTickCount64() - g_reapplyTick < 500) {
+                return;
+            }
+            if (g_typing == on) {
+                return;
+            }
+            g_typing = on;
+            ReapplyPause();
         }
     }
 
-    void OnJsReady(const char*) { PushData(); }
-    void OnJsRefresh(const char*) { PushData(); }
-
-    uint32_t ReadToggleKey()
+    bool ReadPauseGame()
     {
-        // Optional rebind via Data/SKSE/Plugins/SNPlaywright.ini -> [Controls] ToggleKey
-        // (DXScanCode, decimal or 0x-hex). Default F11 (0x57).
-        return static_cast<uint32_t>(
-            GetPrivateProfileIntA("Controls", "ToggleKey", 0x57,
-                                  "Data\\SKSE\\Plugins\\SNPlaywright.ini"));
+        // [Behavior] PauseGame: 0 = world keeps running while the panel is open
+        // (default — you direct the scene live), 1 = freeze the game.
+        return GetPrivateProfileIntA("Behavior", "PauseGame", 0, INI_PATH) != 0;
     }
 
     void SetupLog()
@@ -266,22 +449,37 @@ namespace
         }
 
         LookupFactions();
+        g_pauseGame = ReadPauseGame();
 
         g_view = g_prisma->CreateView("Playwright/index.html", [](PrismaView a_view) {
             logger::info("Playwright view DOM ready ({})", a_view);
-            g_prisma->Hide(a_view);  // start hidden; toggle reveals it
+            // Register listeners HERE (DOM is ready / globals exist) with FLAT
+            // names -- PrismaUI creates window.<name> unconditionally. Doing this
+            // before DOM-ready, or with dotted names, silently fails to bind.
+            g_prisma->RegisterJSListener(a_view, "pwCommand", OnJsCommand);
+            g_prisma->RegisterJSListener(a_view, "pwClose", OnJsClose);
+            g_prisma->RegisterJSListener(a_view, "pwRefresh", OnJsRefresh);
+            g_prisma->RegisterJSListener(a_view, "pwConfig", OnJsConfig);
+            // The view stays SHOWN at all times so its corner dot widget is always
+            // visible; "closed" just collapses to the dot (unfocused, click-through
+            // via pointer-events:none on empty areas). It is never Hidden.
             g_viewReady.store(true);
+            g_prisma->InteropCall(a_view, "pwSetOpen", "0");
+            g_prisma->InteropCall(a_view, "pwSetDirector", IsDirectorOn() ? "1" : "0");
+            logger::info("Playwright JS listeners registered.");
         });
 
-        g_prisma->RegisterJSListener(g_view, "playwright.command", OnJsCommand);
-        g_prisma->RegisterJSListener(g_view, "playwright.close", OnJsClose);
-        g_prisma->RegisterJSListener(g_view, "playwright.ready", OnJsReady);
-        g_prisma->RegisterJSListener(g_view, "playwright.refresh", OnJsRefresh);
+        // The panel is opened solely by the MCM-bound key: PW_Controller fires
+        // PW_PrismaToggle, we catch it here.
+        if (auto* src = SKSE::GetModCallbackEventSource()) {
+            src->AddEventSink(PrismaModEventSink::GetSingleton());
+        }
 
-        KeyHandler::RegisterSink();
-        KeyHandler* keys = KeyHandler::GetSingleton();
-        (void)keys->Register(ReadToggleKey(), KeyEventType::KEY_DOWN,
-                             []() { SKSE::GetTaskInterface()->AddTask([]() { ToggleMenu(); }); });
+        // Watch raw input for Escape while the panel is focused (the game claims
+        // Escape, so the view can't see it on its own).
+        if (auto* idm = RE::BSInputDeviceManager::GetSingleton()) {
+            idm->AddEventSink(EscInputSink::GetSingleton());
+        }
 
         logger::info("Playwright PrismaUI bridge initialized.");
     }
