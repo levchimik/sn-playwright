@@ -109,6 +109,15 @@
 </div>
 
 <script>
+  // PrismaUI RegisterJSListener targets. These stubs MUST exist before use --
+  // PrismaUI replaces each with a native binding once the view is registered.
+  // (Same pattern SkyrimNet's app.js uses for window.skyrimnet.) Without the
+  // pre-declared namespace, the existence guards below are always false and no
+  // command ever reaches C++.
+  window.playwright = window.playwright || {
+    command: function(){}, close: function(){}, ready: function(){}, refresh: function(){}
+  };
+
   var state = { npcs:[], target:null, targetName:"none", director:false };
 
   // ---- C++ -> JS : push nearby-NPC data (called via InteropCall) ----

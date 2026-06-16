@@ -117,6 +117,10 @@ namespace
             if (!a || a == pc || a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) {
                 continue;
             }
+            const char* dn = a->GetDisplayFullName();
+            if (!dn || !dn[0]) {
+                continue;  // skip unnamed/generic actors (empty-name rows)
+            }
             const float du = ppos.GetDistance(a->GetPosition());
             if (du > MAX_UNITS) {
                 continue;
@@ -213,6 +217,7 @@ namespace
     // ---- JS listener callbacks (free functions: no captures) ----
     void OnJsCommand(const char* a_arg)
     {
+        logger::info("JS command -> {}", a_arg ? a_arg : "(null)");
         SendCommandToPapyrus(a_arg ? a_arg : "");
     }
 

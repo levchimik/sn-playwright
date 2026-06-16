@@ -740,6 +740,8 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
     String text = PipeRest(strArg, 2)
     Actor t = ResolveTarget(targetTok)
     Actor pl = Game.GetPlayer()
+    ; Diagnostic (v0.6): confirms the JS->C++->Papyrus bridge delivered the click.
+    Debug.Trace("[Playwright] OnPrismaCommand: " + strArg, 0)
 
     If action == "director"
         ToggleDirector()
