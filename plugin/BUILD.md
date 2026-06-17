@@ -35,5 +35,7 @@ Copy into the Playwright mod:
   `{"directorMode":bool,"npcs":[{"name","id","dist","state","player"?}]}`.
 - **C++ → Papyrus** (`SendEvent` ModCallbackEvent): `PW_PrismaCommand`, strArg =
   `"action|targetId|text"`. `targetId` is `"player"`, a `0x`-runtime-FormID, or empty.
-- Toggle key read from `Data/SKSE/Plugins/SNPlaywright.ini` `[Controls] ToggleKey`
-  (default `0x57` = F11).
+- Panel open/close is Papyrus-driven: the MCM-bound "Open PrismaUI Panel" key (default
+  Shift+F11) makes `PW_Controller` fire the `PW_PrismaToggle` ModEvent, which the DLL's
+  `PrismaModEventSink` catches and turns into `ToggleMenu()`. The DLL does NOT read a
+  toggle key from the ini (the ini holds only `[Behavior] PauseGame`).

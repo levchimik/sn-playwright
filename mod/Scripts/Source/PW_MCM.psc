@@ -1,23 +1,12 @@
 Scriptname PW_MCM extends SKI_ConfigBase
-{SkyUI MCM for Playwright. Rebinds the five SND hotkeys and the
- modifier on the PW_Controller alias, and exposes a small Status page with
+{SkyUI MCM for Playwright. Binds the PrismaUI panel toggle (+ its modifier) on the
+ PW_Controller alias, exposes the sleep options, and a small Status page with
  quick-action buttons. The controller is the quest's first (and only) alias.}
 
 PW_Controller _ctrl
 
 ; cached option IDs (Controls page)
-Int _oiWheel
 Int _oiPrisma
-Int _oiToggle
-Int _oiNarrate
-Int _oiPrompt
-Int _oiSay
-Int _oiThink
-Int _oiTransform
-Int _oiAsleep
-Int _oiAsleepSelf
-Int _oiSleeptalk
-Int _oiSleeptalkSelf
 Int _oiReqMod
 Int _oiModKey
 Int _oiSendBed
@@ -78,19 +67,8 @@ Function OnPageReset(String page)
     Else
         ; default + "Controls" page
         SetCursorFillMode(TOP_TO_BOTTOM)
-        AddHeaderOption("Hotkeys", 0)
-        _oiWheel      = AddKeyMapOption("Open Wheel", c.WheelKey, 0)
+        AddHeaderOption("Panel", 0)
         _oiPrisma     = AddKeyMapOption("Open PrismaUI Panel", c.PrismaKey, 0)
-        _oiToggle     = AddKeyMapOption("Toggle Director Mode", c.ToggleKey, 0)
-        _oiNarrate    = AddKeyMapOption("Narrate (text)", c.NarrateKey, 0)
-        _oiPrompt     = AddKeyMapOption("Prompt to Speak (no text)", c.PromptKey, 0)
-        _oiSay        = AddKeyMapOption("Say (literal, crosshair NPC)", c.SayKey, 0)
-        _oiThink      = AddKeyMapOption("Think (literal, crosshair NPC)", c.ThinkKey, 0)
-        _oiTransform  = AddKeyMapOption("Transform (crosshair NPC via LLM)", c.TransformKey, 0)
-        _oiAsleep       = AddKeyMapOption("Deep Sleep: Crosshair NPC", c.AsleepKey, 0)
-        _oiAsleepSelf   = AddKeyMapOption("Deep Sleep: Self", c.AsleepSelfKey, 0)
-        _oiSleeptalk    = AddKeyMapOption("Sleep-talk: Crosshair NPC", c.SleeptalkKey, 0)
-        _oiSleeptalkSelf = AddKeyMapOption("Sleep-talk: Self", c.SleeptalkSelfKey, 0)
 
         AddHeaderOption("Modifier", 0)
         _oiReqMod = AddToggleOption("Require modifier", c.RequireModifier, 0)
@@ -128,30 +106,8 @@ Function OnOptionKeyMapChange(Int option, Int keyCode, String conflictControl, S
         Return
     EndIf
 
-    If option == _oiWheel
-        c.WheelKey = keyCode
-    ElseIf option == _oiPrisma
+    If option == _oiPrisma
         c.PrismaKey = keyCode
-    ElseIf option == _oiToggle
-        c.ToggleKey = keyCode
-    ElseIf option == _oiNarrate
-        c.NarrateKey = keyCode
-    ElseIf option == _oiPrompt
-        c.PromptKey = keyCode
-    ElseIf option == _oiSay
-        c.SayKey = keyCode
-    ElseIf option == _oiThink
-        c.ThinkKey = keyCode
-    ElseIf option == _oiTransform
-        c.TransformKey = keyCode
-    ElseIf option == _oiAsleep
-        c.AsleepKey = keyCode
-    ElseIf option == _oiAsleepSelf
-        c.AsleepSelfKey = keyCode
-    ElseIf option == _oiSleeptalk
-        c.SleeptalkKey = keyCode
-    ElseIf option == _oiSleeptalkSelf
-        c.SleeptalkSelfKey = keyCode
     ElseIf option == _oiModKey
         c.ModifierKey = keyCode
     Else
@@ -226,9 +182,9 @@ EndFunction
 ; ------------------------------------------------------------------ info text
 Function OnOptionHighlight(Int option)
     If option == _oiReqMod
-        SetInfoText("If ON, SND hotkeys only fire while the modifier key is held. Prevents accidental presses.")
+        SetInfoText("If ON, the panel toggle key only fires while the modifier key is held. Prevents accidental opens.")
     ElseIf option == _oiModKey
-        SetInfoText("Press a key to set the modifier that must be held to arm the SND hotkeys (default Left Shift).")
+        SetInfoText("Press a key to set the modifier that must be held to arm the panel toggle key (default Left Shift).")
     ElseIf option == _oiSendBed
         SetInfoText("If ON, entering Deep Sleep OR Sleep-talk walks the NPC to the nearest bed (via SeverActions) to sleep there. Needs SeverActions installed and a bed within ~58m; otherwise they sleep where they stand.")
     ElseIf option == _oiMurmur
@@ -237,30 +193,8 @@ Function OnOptionHighlight(Int option)
         SetInfoText("Seconds between murmur checks for each nearby sleep-talker. Higher = rarer murmurs (and fewer LLM/voice calls). Default 30.")
     ElseIf option == _oiMurmurChance
         SetInfoText("Chance (0-1) that a nearby sleep-talker murmurs on each check. Lower = sparser. Default 0.35. Each murmur costs one LLM + voice generation.")
-    ElseIf option == _oiWheel
-        SetInfoText("Opens the radial wheel: Enter/Exit Scene, Narrate, Sleep/Wake crosshair NPC.")
     ElseIf option == _oiPrisma
-        SetInfoText("Opens the PrismaUI control panel: nearby-NPC list + action buttons + text box. Needs SNPlaywright.dll and the Prisma UI framework. (An optional hardcoded fallback key can be set in SNPlaywright.ini; off by default.)")
-    ElseIf option == _oiToggle
-        SetInfoText("Director Mode: removes you from the scene so nearby NPCs talk among themselves.")
-    ElseIf option == _oiNarrate
-        SetInfoText("Type narration; a nearby NPC voices it as a general scene event to everyone present. Works in or out of Director Mode.")
-    ElseIf option == _oiPrompt
-        SetInfoText("No-text nudge: prompts the crosshair NPC (or a nearby one) to speak/continue the scene.")
-    ElseIf option == _oiSay
-        SetInfoText("Type a line; it's injected as the crosshair NPC's exact words (subtitle + memory), VERBATIM, no LLM. NOT voiced — SkyrimNet can't TTS an arbitrary literal line. Use Transform for a voiced (LLM) line.")
-    ElseIf option == _oiThink
-        SetInfoText("Type a thought; the crosshair NPC thinks it (private, unvoiced, colors their behavior). LLM-mediated, so wording may be lightly rephrased. Skips dead/unconscious/sleeping NPCs.")
-    ElseIf option == _oiTransform
-        SetInfoText("Type the gist of what you want the crosshair NPC to say; the LLM phrases it in THEIR voice and they speak it (the LLM version of Say). Look at the NPC first.")
-    ElseIf option == _oiAsleep
-        SetInfoText("Deep Sleep: the crosshair NPC goes unconscious — deaf, unresponsive, and others see them as out cold. Cannot be picked to speak.")
-    ElseIf option == _oiAsleepSelf
-        SetInfoText("Deep Sleep on yourself: you stay visible but perceive nothing.")
-    ElseIf option == _oiSleeptalk
-        SetInfoText("Sleep-talk: the crosshair NPC is deaf (perceives nothing) but may occasionally mutter incoherent dream-speech; others hear the murmuring.")
-    ElseIf option == _oiSleeptalkSelf
-        SetInfoText("Sleep-talk on yourself: you perceive nothing but may murmur in your sleep.")
+        SetInfoText("Opens the PrismaUI control panel: nearby-NPC list + action buttons + text box, fully keyboard-drivable. This is the ONLY way to open the panel (default Shift+F11). Needs SNPlaywright.dll and the Prisma UI framework.")
     ElseIf option == _oiDirBtn
         SetInfoText("Enter or exit Director Mode now.")
     ElseIf option == _oiSleepSelfBtn

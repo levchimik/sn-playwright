@@ -1,27 +1,16 @@
 Scriptname PW_Controller extends ReferenceAlias
-{Playwright controller (v0.4). Hosts the hotkeys + radial wheel.
- Every key is MCM-rebindable (see PW_MCM) and gated behind a modifier key,
- SeverActions-style: while RequireModifier is on, no SND key fires unless the
- modifier (default Left Shift) is held. Action functions are public so the MCM
- and the wheel can invoke them directly.}
+{Playwright controller (v0.7). The PrismaUI panel (SNPlaywright.dll) is the sole
+ control surface — it forwards button + keyboard actions here as the PW_PrismaCommand
+ ModEvent. The only registered hotkey is the panel toggle (MCM-rebindable, optionally
+ gated behind a modifier). Action functions are public so the MCM Status page and the
+ panel bridge can invoke them directly.}
 
-; --- Rebindable keys (DXScanCodes). Unbound (-1) by default — set them in the MCM. ---
-Int Property WheelKey      = -1 Auto   ; open the radial wheel
-Int Property ToggleKey     = -1 Auto   ; toggle Director Mode
-Int Property NarrateKey    = -1 Auto   ; narrate a scene event (text box); a nearby NPC voices it
-Int Property PromptKey     = -1 Auto   ; prompt a character to speak (no text)
-Int Property SayKey        = -1 Auto   ; force the crosshair NPC to say literal text (no LLM)
-Int Property ThinkKey      = -1 Auto   ; force the crosshair NPC to think a literal thought (no LLM)
-Int Property TransformKey  = -1 Auto   ; write a line as yourself; the LLM rephrases it and you speak it
-Int Property AsleepKey       = -1 Auto ; toggle Deep Sleep (unconscious) on crosshair NPC
-Int Property AsleepSelfKey   = -1 Auto ; toggle Deep Sleep on yourself
-Int Property SleeptalkKey    = -1 Auto ; toggle Sleep-talk (deaf, but murmurs) on crosshair NPC
-Int Property SleeptalkSelfKey = -1 Auto ; toggle Sleep-talk on yourself
-Int Property PrismaKey        = -1 Auto ; open/close the PrismaUI panel (needs SNPlaywright.dll + Prisma UI)
+; --- Rebindable key (DXScanCode). Defaults to F11 (0x57); rebind in the MCM. ---
+Int Property PrismaKey        = 87 Auto ; open/close the PrismaUI panel (87 = DXScanCode F11; needs SNPlaywright.dll + Prisma UI)
 
-; --- Modifier arming gate. ---
-Int  Property ModifierKey     = 42 Auto    ; DXScanCode held to arm SND keys (42 = LShift; -1/0 = none)
-Bool Property RequireModifier = true Auto  ; if true, SND keys do nothing unless ModifierKey is held
+; --- Modifier gate for the panel toggle. ---
+Int  Property ModifierKey     = 42 Auto    ; DXScanCode held to arm the panel key (42 = LShift; -1/0 = none)
+Bool Property RequireModifier = true Auto  ; if true, the panel key only fires while ModifierKey is held
 
 ; --- Options. ---
 Bool Property SendToBed = false Auto ; if true, EITHER sleep mode walks the NPC to the nearest bed (via SeverActions) to sleep there
@@ -32,7 +21,6 @@ Bool  Property SleeptalkMurmur = true Auto  ; if true, sleep-talkers occasionall
 Float Property MurmurInterval  = 30.0 Auto  ; seconds between murmur checks
 Float Property MurmurChance    = 0.35 Auto  ; per-check chance each nearby sleep-talker murmurs
 
-Bool _textBusy = false     ; guards the shared text-entry menu against re-entry
 Bool _murmurLoop = false   ; true while the murmur OnUpdate loop is scheduled
 Bool _pdWasEnabled = true  ; remembers the player's autonomous-thought setting to restore on OFF
 
@@ -181,84 +169,24 @@ String Function PW_DeafEnd(Actor a) Global
     Return StorageUtil.GetFloatValue(a, "PW_DeafEnd", 0.0) as String
 EndFunction
 
+; Only the panel-toggle key is registered now (the radial wheel and the per-action
+; hotkeys were retired in v0.7 — the PrismaUI panel covers everything).
 Function RegisterKeys()
     UnregisterForAllKeys()
-    If WheelKey > 0
-        RegisterForKey(WheelKey)
-    EndIf
-    If ToggleKey > 0
-        RegisterForKey(ToggleKey)
-    EndIf
-    If NarrateKey > 0
-        RegisterForKey(NarrateKey)
-    EndIf
-    If PromptKey > 0
-        RegisterForKey(PromptKey)
-    EndIf
-    If SayKey > 0
-        RegisterForKey(SayKey)
-    EndIf
-    If ThinkKey > 0
-        RegisterForKey(ThinkKey)
-    EndIf
-    If TransformKey > 0
-        RegisterForKey(TransformKey)
-    EndIf
-    If AsleepKey > 0
-        RegisterForKey(AsleepKey)
-    EndIf
-    If AsleepSelfKey > 0
-        RegisterForKey(AsleepSelfKey)
-    EndIf
-    If SleeptalkKey > 0
-        RegisterForKey(SleeptalkKey)
-    EndIf
-    If SleeptalkSelfKey > 0
-        RegisterForKey(SleeptalkSelfKey)
-    EndIf
     If PrismaKey > 0
         RegisterForKey(PrismaKey)
     EndIf
 EndFunction
 
 Event OnKeyDown(Int keyCode)
-    ; Modifier arming gate (SeverActions pattern): swallow the key unless the
-    ; configured modifier is currently held.
+    ; Optional modifier gate (SeverActions pattern): ignore the panel key unless the
+    ; configured modifier is held. The panel toggle must fire even while the panel is
+    ; OPEN (which puts the game in menu mode), so there is no menu-mode guard.
     If RequireModifier && ModifierKey > 0 && !Input.IsKeyPressed(ModifierKey)
         Return
     EndIf
-    ; The panel toggle must fire even while the panel is OPEN (which puts the game
-    ; in menu mode), so it is handled BEFORE the menu-mode guard below -- otherwise
-    ; the combo could open the panel but never close it.
     If keyCode == PrismaKey
         TogglePrismaPanel()
-        Return
-    EndIf
-    If Utility.IsInMenuMode()
-        Return
-    EndIf
-    If keyCode == WheelKey
-        OpenWheel()
-    ElseIf keyCode == ToggleKey
-        ToggleDirector()
-    ElseIf keyCode == NarrateKey
-        Narrate()
-    ElseIf keyCode == PromptKey
-        PromptSpeak()
-    ElseIf keyCode == SayKey
-        Say()
-    ElseIf keyCode == ThinkKey
-        Think()
-    ElseIf keyCode == TransformKey
-        Transform()
-    ElseIf keyCode == AsleepKey
-        AsleepCrosshair()
-    ElseIf keyCode == AsleepSelfKey
-        AsleepSelf()
-    ElseIf keyCode == SleeptalkKey
-        SleeptalkCrosshair()
-    ElseIf keyCode == SleeptalkSelfKey
-        SleeptalkSelf()
     EndIf
 EndEvent
 
@@ -302,15 +230,6 @@ Function ToggleDirector()
 EndFunction
 
 ; ------------------------------------------------------------------ deep sleep (unconscious)
-Function AsleepCrosshair()
-    Actor t = Game.GetCurrentCrosshairRef() as Actor
-    If !t
-        Debug.Notification("Deep Sleep: look at an actor first")
-        Return
-    EndIf
-    ToggleAsleepActor(t)
-EndFunction
-
 Function AsleepSelf()
     ToggleAsleepActor(Game.GetPlayer())
 EndFunction
@@ -355,15 +274,6 @@ Function ToggleAsleepActor(Actor t)
 EndFunction
 
 ; ------------------------------------------------------------------ sleep-talk
-Function SleeptalkCrosshair()
-    Actor t = Game.GetCurrentCrosshairRef() as Actor
-    If !t
-        Debug.Notification("Sleep-talk: look at an actor first")
-        Return
-    EndIf
-    ToggleSleeptalkActor(t)
-EndFunction
-
 Function SleeptalkSelf()
     ToggleSleeptalkActor(Game.GetPlayer())
 EndFunction
@@ -459,40 +369,10 @@ Event OnUpdate()
     EndIf
 EndEvent
 
-; ------------------------------------------------------------------ text entry helper
-; Open the shared UIExtensions text box and return what was typed ("" on cancel /
-; unavailable). Guards against re-entry via _textBusy. OpenMenu blocks until closed.
-String Function PromptText()
-    String result = ""
-    UITextEntryMenu menu = UIExtensions.GetMenu("UITextEntryMenu") as UITextEntryMenu
-    If menu
-        menu.SetPropertyString("text", "")
-        menu.OpenMenu()
-        result = menu.GetResultString()
-    Else
-        Debug.Notification("UIExtensions unavailable")
-    EndIf
-    Return result
-EndFunction
-
 ; ------------------------------------------------------------------ narrate
-; Type a scene event; a nearby NPC voices it as a general remark to everyone present
-; (DirectNarration with an NPC originator + no target). Works in or out of Director
-; Mode — in Director Mode the player is absent, otherwise they're in the audience.
-Function Narrate()
-    If _textBusy
-        Return
-    EndIf
-    _textBusy = true
-    String narration = PromptText()
-    _textBusy = false
-    If narration != ""
-        NarrateText(narration, Game.GetCurrentCrosshairRef() as Actor)
-    EndIf
-EndFunction
-
-; Core. preferred = the NPC to voice it (crosshair, or the panel's selected
-; target); None falls back to a random nearby NPC. Reused by the panel.
+; Voice a scene event through a nearby NPC. preferred = the NPC to voice it (the panel's
+; selected target); None falls back to a random nearby NPC. Works in or out of Director
+; Mode (DirectNarration with an NPC originator + no target).
 Function NarrateText(String narration, Actor preferred)
     Actor pl = Game.GetPlayer()
     Actor speaker = preferred
@@ -522,34 +402,7 @@ Function SystemEvent(String content, Actor target)
     EndIf
 EndFunction
 
-; ------------------------------------------------------------------ say (literal NPC line, text-only)
-; Inject your exact words as the crosshair NPC's line, verbatim, no LLM. NOTE: this is
-; recorded into their dialogue history/context (subtitle + memory) but NOT voiced —
-; SkyrimNet has no API to TTS an arbitrary literal line; only LLM-generated lines get
-; voiced. Use Transform (DirectNarration) when you want it spoken aloud.
-Function Say()
-    If _textBusy
-        Return
-    EndIf
-    Actor t = Game.GetCurrentCrosshairRef() as Actor
-    If !t || t == Game.GetPlayer()
-        Debug.Notification("Say: look at an NPC first")
-        Return
-    EndIf
-    _textBusy = true
-    String line = PromptText()
-    _textBusy = false
-    SayTo(t, line)
-EndFunction
-
-; Core (reused by the wheel/hotkey crosshair path and the PrismaUI panel).
-Function SayTo(Actor t, String line)
-    If t && line != ""
-        SkyrimNetApi.RegisterDialogue(t, line)
-        Debug.Notification(t.GetDisplayName() + " says it")
-    EndIf
-EndFunction
-
+; ------------------------------------------------------------------ say (panel speaker/target)
 ; Panel Say with the speaker/target pairing. The speaker utters the line; if a distinct
 ; target is also selected, it's addressed TO them (RegisterDialogueToListener / a directed
 ; DirectNarration). A lone selection acts as the speaker, so this stays back-compatible
@@ -606,27 +459,11 @@ Function SayPaired(Actor speaker, Actor listener, String line, Bool xform)
 EndFunction
 
 ; ------------------------------------------------------------------ think (literal NPC thought)
-; Inject a literal, persistent, unvoiced thought into the crosshair NPC, verbatim (no
-; LLM). The npc_thoughts schema requires both `npc_name` and `thoughts`, so we hand the
-; structured data to RegisterEvent as a JSON object in the content arg — a bare string
-; only fills `thoughts` and logs "Missing required field 'npc_name'". JSON is escaped
-; via SeverActions' native helper so quotes/backslashes in the thought are safe.
-Function Think()
-    If _textBusy
-        Return
-    EndIf
-    Actor t = Game.GetCurrentCrosshairRef() as Actor
-    If !t || t == Game.GetPlayer()
-        Debug.Notification("Think: look at an NPC first")
-        Return
-    EndIf
-    _textBusy = true
-    String thought = PromptText()
-    _textBusy = false
-    ThinkTo(t, thought)
-EndFunction
-
-; Core (reused by the wheel/hotkey crosshair path and the PrismaUI panel).
+; Inject a literal, persistent, unvoiced thought into an NPC, verbatim (no LLM). The
+; npc_thoughts schema requires both `npc_name` and `thoughts`, so we hand the structured
+; data to RegisterEvent as a JSON object in the content arg — a bare string only fills
+; `thoughts` and logs "Missing required field 'npc_name'". JSON is escaped via SeverActions'
+; native helper so quotes/backslashes in the thought are safe. Used by the PrismaUI panel.
 Function ThinkTo(Actor t, String thought)
     If t && thought != ""
         String data = "{\"npc_name\":\"" + SeverActionsNative.EscapeJsonString(t.GetDisplayName()) + "\",\"thoughts\":\"" + SeverActionsNative.EscapeJsonString(thought) + "\"}"
@@ -645,27 +482,10 @@ Function ThinkLLM(Actor t, String hint)
     EndIf
 EndFunction
 
-; ------------------------------------------------------------------ transform (crosshair NPC line via LLM)
-; Write the gist of what you want the crosshair NPC to say; the LLM turns it into a
-; line in THAT NPC's voice and the NPC speaks it (the LLM counterpart of Say). Fires
-; from the NPC, not the player: DirectNarration with the NPC as originator. Needs a
-; crosshair NPC.
-Function Transform()
-    If _textBusy
-        Return
-    EndIf
-    Actor t = Game.GetCurrentCrosshairRef() as Actor
-    If !t || t == Game.GetPlayer()
-        Debug.Notification("Transform: look at an NPC first")
-        Return
-    EndIf
-    _textBusy = true
-    String line = PromptText()
-    _textBusy = false
-    TransformTo(t, line)
-EndFunction
-
-; Core (reused by the wheel/hotkey crosshair path and the PrismaUI panel).
+; ------------------------------------------------------------------ transform (NPC line via LLM)
+; Core (used by the PrismaUI panel). Hand the gist of what you want the NPC to say; the LLM
+; turns it into a line in THAT NPC's voice and the NPC speaks it (the LLM counterpart of
+; Say). Fires from the NPC, not the player: DirectNarration with the NPC as originator.
 Function TransformTo(Actor t, String line)
     If t && line != ""
         SkyrimNetApi.DirectNarration(line, t, None)
@@ -683,11 +503,7 @@ EndFunction
 ;   * The PLAYER -> TriggerPlayerDialogue(): SkyrimNet's autonomous player-dialogue
 ;     ("auto-roleplay") path.
 ;   * No specific target -> TriggerContinueNarration(): let the selector continue the scene.
-Function PromptSpeak()
-    PromptActor(Game.GetCurrentCrosshairRef() as Actor)
-EndFunction
-
-; Core. preferred = the nudge target (crosshair, or the panel's selected speaker/target).
+; preferred = the nudge target (the panel's selected speaker/target).
 Function PromptActor(Actor preferred)
     If preferred == Game.GetPlayer()
         SkyrimNetApi.TriggerPlayerDialogue()
@@ -701,132 +517,11 @@ Function PromptActor(Actor preferred)
     EndIf
 EndFunction
 
-; ------------------------------------------------------------------ wheel
-; UIWheelMenu index -> compass position (reverse-engineered):
-;   0=NW(upper-left) 1=W(left) 2=SW(lower-left) 3=S(bottom)
-;   4=NE(upper-right) 5=E(right) 6=SE(lower-right) 7=N(top)
-; Layout: LEFT column top->down = Director(top), Prompt, Say, Think.
-;         RIGHT column top->down = Narrate, Transform, Sleep-talk, Deep Sleep(bottom).
-; optionLabelText = the spoke label; optionText = the description shown on highlight.
-Function OpenWheel()
-    Actor pl = Game.GetPlayer()
-    Faction blf = GetBlacklistFaction()
-    Faction slf = GetAsleepFaction()
-    Faction stf = GetSleeptalkFaction()
-    Bool directorOn = (blf != None) && pl.IsInFaction(blf)
-    Actor cross = Game.GetCurrentCrosshairRef() as Actor
-    Bool haveNpc = cross && cross != pl
-    String cname = ""
-    If haveNpc
-        cname = cross.GetDisplayName()
-    EndIf
-
-    UIExtensions.InitMenu("UIWheelMenu")
-
-    ; 7 (top) - Director
-    If directorOn
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 7, "Exit Scene")
-    Else
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 7, "Enter Scene")
-    EndIf
-    UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionLabelText", 7, "Director")
-    UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 7, true)
-
-    ; 0 (upper-left) - Prompt (no text)
-    If haveNpc
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 0, "Prompt " + cname)
-    Else
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 0, "Prompt to Speak")
-    EndIf
-    UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionLabelText", 0, "Prompt")
-    UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 0, true)
-
-    ; 1 (left) - Say (literal NPC speech; needs a crosshair NPC)
-    If haveNpc
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 1, "Say (as " + cname + ")")
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 1, true)
-    Else
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 1, "Say (look at NPC)")
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 1, false)
-    EndIf
-    UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionLabelText", 1, "Say")
-
-    ; 2 (lower-left) - Think (literal NPC thought; needs a crosshair NPC)
-    If haveNpc
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 2, "Think (as " + cname + ")")
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 2, true)
-    Else
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 2, "Think (look at NPC)")
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 2, false)
-    EndIf
-    UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionLabelText", 2, "Think")
-
-    ; 4 (upper-right) - Narrate
-    UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 4, "Narrate a scene event")
-    UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionLabelText", 4, "Narrate")
-    UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 4, true)
-
-    ; 5 (right) - Transform (crosshair NPC speaks an LLM rephrase; needs a crosshair NPC)
-    If haveNpc
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 5, "Transform (as " + cname + ")")
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 5, true)
-    Else
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 5, "Transform (look at NPC)")
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 5, false)
-    EndIf
-    UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionLabelText", 5, "Transform")
-
-    ; 6 (lower-right) - Sleep-talk on the crosshair NPC (context label)
-    If haveNpc && (stf != None) && cross.IsInFaction(stf)
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 6, "Wake " + cname)
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 6, true)
-    ElseIf haveNpc
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 6, "Sleep-talk " + cname)
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 6, true)
-    Else
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 6, "Sleep-talk (look at NPC)")
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 6, false)
-    EndIf
-    UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionLabelText", 6, "Sleep-talk")
-
-    ; 3 (bottom) - Deep Sleep on the crosshair NPC (context label)
-    If haveNpc && (slf != None) && cross.IsInFaction(slf)
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 3, "Wake " + cname)
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 3, true)
-    ElseIf haveNpc
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 3, "Deep Sleep " + cname)
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 3, true)
-    Else
-        UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionText", 3, "Deep Sleep (look at NPC)")
-        UIExtensions.SetMenuPropertyIndexBool("UIWheelMenu", "optionEnabled", 3, false)
-    EndIf
-    UIExtensions.SetMenuPropertyIndexString("UIWheelMenu", "optionLabelText", 3, "Deep Sleep")
-
-    Int sel = UIExtensions.OpenMenu("UIWheelMenu")
-    If sel == 7
-        ToggleDirector()
-    ElseIf sel == 0
-        PromptSpeak()
-    ElseIf sel == 1
-        Say()
-    ElseIf sel == 2
-        Think()
-    ElseIf sel == 4
-        Narrate()
-    ElseIf sel == 5
-        Transform()
-    ElseIf sel == 6
-        SleeptalkCrosshair()
-    ElseIf sel == 3
-        AsleepCrosshair()
-    EndIf
-EndFunction
-
 ; ------------------------------------------------------------------ PrismaUI panel
 ; Action payload from SNPlaywright.dll: "action|targetId|text".
 ;   targetId: "player", a "0x"-prefixed runtime FormID, or "" (no target).
 ;   text: free text (may itself contain '|', so it's everything after field 2).
-; Actions map onto the same cores the wheel/hotkeys use, so behaviour is identical.
+; Actions map onto the shared action cores below.
 Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akSender)
     ; Panel payload: "action|targetId|transform|speakerId|text" (text is everything after
     ; field 4, so it may itself contain '|'). transform == "1" routes the text actions
@@ -891,10 +586,9 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
     EndIf
 EndFunction
 
-; Idempotent sleep-state setters for the panel (the wheel/hotkey path toggles;
-; the panel has explicit Deep Sleep / Sleep-talk / Wake buttons). They lean on the
-; existing toggles so all the deaf-window / walk-to-bed / mutual-exclusion logic is
-; shared and there's one source of truth.
+; Idempotent sleep-state setters for the panel (the panel has explicit Deep Sleep /
+; Sleep-talk / Wake buttons). They lean on the existing toggles so all the deaf-window /
+; walk-to-bed / mutual-exclusion logic is shared and there's one source of truth.
 Function PrismaSleep(Actor t)
     Faction slf = GetAsleepFaction()
     If slf && !t.IsInFaction(slf)

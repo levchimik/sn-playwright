@@ -8,11 +8,14 @@ playwright running a live table read.
 > (`PW_` prefix, plugin `SNPlaywright.esp`) once it grew past the original
 > leave-the-scene feature.
 
-**v0.6** adds a **PrismaUI control panel** (`SNPlaywright.dll`): an on-screen panel
-with a live nearby-NPC list and the full action set as buttons + a roomy text box —
-no crosshair aiming, no cramped UIExtensions input, multi-word names just work. The
-wheel + MCM hotkeys still work exactly as before; the panel is an alternative
-surface, not a replacement.
+The **PrismaUI control panel** (`SNPlaywright.dll`) is the control surface: an
+on-screen, fully keyboard-drivable panel with a live nearby-NPC list, the full action
+set as buttons, a roomy text box, and an editable conversation log — no crosshair
+aiming, multi-word names just work.
+
+> **v0.7** retires the old UIExtensions radial wheel and the per-action hotkeys; the
+> panel (and its keyboard controls) is now the sole interface, and **UIExtensions is no
+> longer a dependency**.
 
 ## Actions
 
@@ -20,11 +23,11 @@ surface, not a replacement.
 |---|---|
 | **Director Mode** | Toggle yourself out of the scene (SkyrimNet `ActorBlacklistFaction`). NPCs talk among themselves; you're unseen/unheard and narrate from outside. |
 | **Narrate** | Type a scene event; a nearby NPC voices it as a general remark to everyone present. Works in or out of Director Mode. |
-| **Prompt** | No-text nudge — prompts the crosshair NPC (or a nearby one) to speak/continue the scene. Player stays in the audience but isn't force-addressed. |
-| **Say** | The crosshair NPC's line, **verbatim** (text/subtitle + memory). *Not voiced* — SkyrimNet can't TTS an arbitrary literal line. |
-| **Transform** | The crosshair NPC speaks an **LLM-phrased** line from your gist, in their voice (voiced). The spoken sibling of Say. |
-| **Think** | Inject a private, unvoiced **thought** into the crosshair NPC (LLM-mediated; colors their behavior). |
-| **Deep Sleep** | Crosshair NPC (or self) goes deeply unconscious — deaf, unselectable, others see them out cold. Optional walk-to-bed. |
+| **Prompt** | No-text nudge — prompts the selected NPC (or a nearby one) to speak/continue the scene. Player stays in the audience but isn't force-addressed. |
+| **Say** | The selected speaker's line, **verbatim** (text/subtitle + memory), optionally addressed to a paired target. *Not voiced* — SkyrimNet can't TTS an arbitrary literal line. |
+| **Transform** | The selected NPC speaks an **LLM-phrased** line from your gist, in their voice (voiced). The spoken sibling of Say. |
+| **Think** | Inject a private, unvoiced **thought** into the selected NPC (verbatim, or LLM-phrased from your gist). |
+| **Deep Sleep** | Selected NPC (or the player) goes deeply unconscious — deaf, unselectable, others see them out cold. Optional walk-to-bed. |
 | **Sleep-talk** | Like Deep Sleep but they may murmur dream fragments aloud (ambient channel; never pulls others into conversation). Optional walk-to-bed. |
 
 Deep Sleep / Sleep-talk also work **on the player** (Self), and a woken actor
@@ -34,9 +37,8 @@ decorators).
 
 ## The PrismaUI panel (v0.6)
 
-Press the panel key (**F11** by default; rebind in
-`SKSE/Plugins/SNPlaywright.ini` → `[Controls] ToggleKey`, a DXScanCode) to open a
-left-side panel. It lists the nearby cast (distance-sorted, with **asleep** /
+Press the panel key (**Shift+F11** by default — bind/rebind **Open PrismaUI Panel**
+and its modifier in the MCM) to open a left-side panel. It lists the nearby cast (distance-sorted, with **asleep** /
 **murmuring** badges) plus a **(you)** row at the top. Click a name to target it,
 type into the text box, and hit an action: **Say / Transform / Think / Prompt /
 Narrate / Deep Sleep / Sleep-talk / Wake**, plus a **Director** toggle in the
@@ -46,9 +48,9 @@ the ✕ closes it.
 How it works: `SNPlaywright.dll` (a thin CommonLibSSE-NG SKSE plugin) owns the
 PrismaUI view, enumerates the cast itself, and forwards button clicks to
 `PW_Controller` as the `PW_PrismaCommand` SKSE ModEvent — every action runs through
-the *same* Papyrus cores the wheel/hotkeys use, so behaviour is identical. **Needs
-the Prisma UI framework**; without it the DLL no-ops and the wheel/hotkeys still
-work.
+the Papyrus action cores. **Needs the Prisma UI framework**; without it the DLL
+no-ops — the panel is unavailable, though the MCM Status page (Director toggle +
+self-sleep) and the prompt overrides still work.
 
 ## Conversation log (v0.7)
 
@@ -95,34 +97,23 @@ across sessions (localStorage). The panel and controls window are both draggable
 the panel is resizable. The conversation log keeps polling for new entries even while
 the game is paused.
 
-## The wheel (UIWheelMenu radial, 8 slots)
+## MCM (SkyUI → Playwright)
 
-```
-              Director (top)
-   Prompt                      Narrate
-   Say                         Transform
-   Think                       Sleep-talk
-            Deep Sleep (bottom)
-```
-Left column = Director / Prompt / Say / Think; right column = Narrate / Transform /
-Sleep-talk / Deep Sleep. Crosshair-dependent slots (Say/Think/Transform/Sleep-talk/
-Deep Sleep) grey out unless you're looking at an NPC and show their name + current
-state.
-
-## Controls
-
-All keys are **unbound by default** — set them in the MCM (SkyUI → **Playwright** →
-Controls). Every Playwright key is gated behind a **modifier** (default Left Shift,
-SeverActions-style): nothing fires unless the modifier is held while *Require
-modifier* is on. The MCM also exposes **Send to bed (while sleeping)** and
-**Sleep-talk murmuring** (with interval/chance sliders).
+- **Controls** — the **Open PrismaUI Panel** key (default **F11**). This is the only way
+  to open the panel, so don't leave it unbound. A **modifier** gate (default Left Shift,
+  ON) means it only fires while the modifier is held — i.e. **Shift+F11**; rebind the key
+  or turn the modifier off here.
+- **Options** — **Send to bed (while sleeping)** and **Sleep-talk murmuring** (with
+  interval/chance sliders).
+- **Status** — live Director state plus quick buttons: **Director** toggle, **Deep
+  Sleep: Self**, **Sleep-talk: Self**.
 
 ## Contents
 
 - **Plugin** `SNPlaywright.esp` (ESL-flagged): quest `PW_DirectorQuest` (player alias →
   `PW_Controller`), quest `PW_MCMConfig` (→ `PW_MCM`), factions `PW_AsleepFaction`
   (0x801) and `PW_SleeptalkFaction` (0x803).
-- **Scripts** `PW_Controller` (hotkeys + wheel + actions), `PW_MCM` (SkyUI MCM).
+- **Scripts** `PW_Controller` (panel bridge + action cores + panel-toggle key), `PW_MCM` (SkyUI MCM).
 - **Loose prompt overrides** under `SKSE/Plugins/SkyrimNet/prompts/` — stock SkyrimNet
   prompts with gated branches added (byte-identical to stock when the player is not in
   any Playwright faction). They reference `PW_AsleepFaction`/`PW_SleeptalkFaction` by
@@ -130,9 +121,9 @@ modifier* is on. The MCM also exposes **Send to bed (while sleeping)** and
 
 ## Dependencies
 
-SkyrimNet, SKSE, UIExtensions (wheel + text entry), PapyrusUtil (StorageUtil), and
-SeverActions (walk-to-bed + JSON helper). The v0.6 panel additionally needs the
-**Prisma UI** framework — optional; skip it and the wheel/hotkeys cover everything.
+SkyrimNet, SKSE, **Prisma UI** (the panel framework — required: the panel is the only
+interface), PapyrusUtil (StorageUtil), and SeverActions (walk-to-bed + JSON helper).
+**UIExtensions is no longer required** as of v0.7 (the radial wheel was retired).
 
 ## Install
 
@@ -140,7 +131,8 @@ SeverActions (walk-to-bed + JSON helper). The v0.6 panel additionally needs the
    overrides win. Enable **`SNPlaywright.esp`** in the Plugins pane.
 2. **Fully restart the game** — SkyrimNet caches prompt templates at load, so the
    overrides only apply on a fresh launch.
-3. Bind keys in the MCM (SkyUI → Playwright → Controls).
+3. The panel opens with **Shift+F11** by default; rebind **Open PrismaUI Panel** (and its
+   modifier) in the MCM (SkyUI → Playwright → Controls).
 
 ## Notes / limitations
 
