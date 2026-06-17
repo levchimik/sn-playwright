@@ -3,6 +3,11 @@
 #include <winhttp.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstdlib>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -30,10 +35,14 @@ namespace
     RE::TESFaction* g_facSleeptalk = nullptr;  // PW_SleeptalkFaction 0x803 SNPlaywright.esp
     RE::TESFaction* g_facBlacklist = nullptr;  // SkyrimNet ActorBlacklistFaction 0x12DB SkyrimNet.esp
 
-    bool     g_pauseGame = false;   // manual "Pause" pill, persisted (ini [Behavior] PauseGame)
-    bool     g_typing = false;      // transient: the panel's text box currently has focus
-    bool     g_appliedPause = false;// pause value currently in effect on the live view
-    uint64_t g_reapplyTick = 0;     // when we last ran an Unfocus->Focus cycle (loop guard)
+    bool              g_pauseGame = false;   // manual "Pause" pill, persisted (ini [Behavior] PauseGame)
+    bool              g_captureKeys = false; // [Behavior] CaptureKeys: steal keys from other mods while open
+    std::atomic<bool> g_typing{false};       // transient: the panel's text box currently has focus
+    std::atomic<bool> g_panelOpen{false};    // panel expanded + focused (vs collapsed to the corner dot)
+    std::atomic<bool> g_lookMode{false};     // RMB held: panel temporarily unfocused so you can look + move
+    RE::Setting*      g_alwaysRun = nullptr; // "bAlwaysRunByDefault:Controls" (cached) -- read for run/walk resync
+    bool              g_appliedPause = false; // pause value currently in effect on the live view
+    uint64_t          g_reapplyTick = 0;      // when we last ran an Unfocus->Focus cycle (loop guard)
 
     bool EffectivePause() { return g_pauseGame || g_typing; }
 
@@ -41,8 +50,35 @@ namespace
     std::string g_apiHost = "127.0.0.1";
     int         g_apiPort = 8080;
 
+    // Live interaction radius mirrored from SkyrimNet (GET /config?api=get&name=game).
+    // Whisper mode is a global SkyrimNet toggle that swaps interaction.maxDistance between
+    // normalMaxDistance and whisperMaxDistance; we read the active value and gate our cast
+    // list on it so the panel shows exactly who SkyrimNet considers in-scene. Defaults match
+    // SkyrimNet's stock normal radius (used until the first successful /config fetch, or if
+    // the web server is off).
+    std::atomic<float> g_interactRadius{1600.0f};  // active interaction.maxDistance
+    std::atomic<float> g_normalDist{1600.0f};      // interaction.normalMaxDistance
+    std::atomic<float> g_whisperDist{200.0f};      // interaction.whisperMaxDistance
+    std::atomic<bool>  g_whisperOn{false};         // active radius ~= whisper radius
+    // get_nearby_npc_list's awareness distance = interaction.maxDistance * this; we pass it to
+    // nearby-actors so our cast == SkyrimNet's "available to speak with" set.
+    std::atomic<float> g_awarenessMult{2.0f};      // interaction.nearbyNPCAwarenessMultiplier
+
+    // Snapshot of SkyrimNet's nearby/addressable cast (from /game-data?api=nearby-actors), refreshed
+    // off-thread. This is the set SkyrimNet treats as in-scene (awareness radius + ActorFilter; NO
+    // line-of-sight filtering -- occluded-but-nearby NPCs stay, matching "available to speak with").
+    // We resolve each formID locally only to tag sleep state.
+    struct SceneActor
+    {
+        std::uint32_t formID = 0;
+        std::string   name;       // raw (unescaped) display name from SkyrimNet
+        float         distUnits = 0.0f;
+    };
+    std::mutex               g_sceneMutex;
+    std::vector<SceneActor>  g_scene;            // guarded by g_sceneMutex
+    std::atomic<bool>        g_sceneValid{false};  // a SkyrimNet fetch has succeeded at least once
+
     constexpr const char* EVT_COMMAND = "PW_PrismaCommand";  // DLL -> Papyrus (action payload)
-    constexpr float       MAX_UNITS = 4096.0f;               // ~58 m search radius
     constexpr float       UNITS_PER_M = 70.0f;
     constexpr const char* INI_PATH = "Data\\SKSE\\Plugins\\SNPlaywright.ini";
 
@@ -89,6 +125,96 @@ namespace
                 } else {
                     out += static_cast<char>(c);
                 }
+            }
+        }
+        return out;
+    }
+
+    // Minimal numeric extractor: returns the number after "key": in a JSON blob,
+    // searching from `from`. No JSON dep -- SkyrimNet's /config payload is large but we
+    // only need three interaction fields. Returns `fallback` if absent/unparseable.
+    float JsonNum(const std::string& j, const char* key, size_t from, float fallback)
+    {
+        const std::string needle = std::string("\"") + key + "\"";
+        const size_t k = j.find(needle, from);
+        if (k == std::string::npos) {
+            return fallback;
+        }
+        size_t c = j.find(':', k + needle.size());
+        if (c == std::string::npos) {
+            return fallback;
+        }
+        ++c;
+        while (c < j.size() && (j[c] == ' ' || j[c] == '\t' || j[c] == '\n' || j[c] == '\r')) {
+            ++c;
+        }
+        char* end = nullptr;
+        const double v = std::strtod(j.c_str() + c, &end);
+        if (end == j.c_str() + c) {
+            return fallback;
+        }
+        return static_cast<float>(v);
+    }
+
+    // Boolean variant: 1 = true, 0 = false, returns `fallback` if absent. Accepts JSON
+    // true/false or 1/0.
+    int JsonBool(const std::string& j, const char* key, int fallback)
+    {
+        const std::string needle = std::string("\"") + key + "\"";
+        const size_t k = j.find(needle);
+        if (k == std::string::npos) {
+            return fallback;
+        }
+        size_t c = j.find(':', k + needle.size());
+        if (c == std::string::npos) {
+            return fallback;
+        }
+        ++c;
+        while (c < j.size() && (j[c] == ' ' || j[c] == '\t' || j[c] == '\n' || j[c] == '\r')) {
+            ++c;
+        }
+        if (c >= j.size()) {
+            return fallback;
+        }
+        const char ch = j[c];
+        if (ch == 't' || ch == 'T' || ch == '1') {
+            return 1;
+        }
+        if (ch == 'f' || ch == 'F' || ch == '0') {
+            return 0;
+        }
+        return fallback;
+    }
+
+    // String variant: returns the (unescaped) string value after "key": in `j`, or "" if absent.
+    // Handles backslash escapes minimally (enough for SkyrimNet actor names).
+    std::string JsonStr(const std::string& j, const char* key)
+    {
+        const std::string needle = std::string("\"") + key + "\"";
+        const size_t k = j.find(needle);
+        if (k == std::string::npos) {
+            return "";
+        }
+        size_t c = j.find(':', k + needle.size());
+        if (c == std::string::npos) {
+            return "";
+        }
+        ++c;
+        while (c < j.size() && (j[c] == ' ' || j[c] == '\t' || j[c] == '\n' || j[c] == '\r')) {
+            ++c;
+        }
+        if (c >= j.size() || j[c] != '"') {
+            return "";
+        }
+        ++c;
+        std::string out;
+        while (c < j.size() && j[c] != '"') {
+            if (j[c] == '\\' && c + 1 < j.size()) {
+                out += j[c + 1];
+                c += 2;
+            } else {
+                out += j[c];
+                ++c;
             }
         }
         return out;
@@ -249,48 +375,143 @@ namespace
         const char* state;  // "awake" | "asleep" | "sleeptalk"
     };
 
-    // Build the {"directorMode":bool,"npcs":[...]} payload from live game state.
+    // Pull SkyrimNet's nearby/addressable cast and cache it in g_scene. Runs OFF the main thread (HTTP).
+    //
+    // /game-data?api=nearby-actors is a lightweight, reliable data query (unlike the render-template
+    // endpoint, which is heavy and fails under 1 Hz polling). It returns SkyrimNet's in-scene set --
+    // the awareness radius (we pass maxDistance * nearbyNPCAwarenessMultiplier, the value
+    // get_nearby_npc_list defaults to) + ActorFilter, with NO line-of-sight filtering, so
+    // occluded-but-nearby NPCs stay listed. We drop the player (isPlayer) -- it's a separate selectable
+    // row. Each actor carries formID (hex) + name + distance; we keep formID + name (distance is
+    // recomputed live in BuildNpcJson).
+    //
+    // On any HTTP failure we KEEP the last good snapshot (no blink); g_sceneValid only goes true.
+    void FetchSceneBlocking()
+    {
+        float r = g_interactRadius.load() * g_awarenessMult.load();
+        if (r < 1.0f) {
+            r = 1.0f;
+        }
+        if (r > 10000.0f) {
+            r = 10000.0f;  // SkyrimNet hard-caps nearby-actors radius at 10000
+        }
+        const std::string path =
+            "/game-data?api=nearby-actors&radius=" + std::to_string(static_cast<int>(r + 0.5f));
+        const std::string resp = HttpRequest(L"GET", path, "");
+
+        const size_t ap = resp.find("\"actors\"");
+        if (resp.empty() || ap == std::string::npos) {
+            return;  // server off / bad response -> keep last good list
+        }
+        std::vector<SceneActor> scene;
+        const size_t lb = resp.find('[', ap);
+        const size_t rb = (lb != std::string::npos) ? resp.find(']', lb) : std::string::npos;
+        if (lb != std::string::npos && rb != std::string::npos) {
+            size_t pos = lb + 1;
+            for (;;) {
+                const size_t os = resp.find('{', pos);
+                if (os == std::string::npos || os > rb) {
+                    break;
+                }
+                const size_t oe = resp.find('}', os);  // actor objects are flat -- no nested braces
+                if (oe == std::string::npos || oe > rb) {
+                    break;
+                }
+                const std::string obj = resp.substr(os, oe - os + 1);
+                pos = oe + 1;
+                if (JsonBool(obj, "isPlayer", 0) == 1) {
+                    continue;  // player is rendered separately
+                }
+                const std::string fid = JsonStr(obj, "formID");
+                if (fid.empty()) {
+                    continue;
+                }
+                const auto formID = static_cast<std::uint32_t>(std::strtoul(fid.c_str(), nullptr, 16));  // hex
+                if (formID == 0) {
+                    continue;
+                }
+                scene.push_back(SceneActor{ formID, JsonStr(obj, "name"), JsonNum(obj, "distance", 0, 0.0f) });
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_sceneMutex);
+            g_scene.swap(scene);
+        }
+        g_sceneValid.store(true);
+    }
+
+    // Build the {"directorMode":bool,"npcs":[...]} payload. Primary source is SkyrimNet's scene snapshot
+    // (g_scene, filled by FetchSceneBlocking) so the list matches SkyrimNet exactly; if SkyrimNet's web
+    // server has never answered, fall back to a local enumeration (distance + optional occlusion raycast).
     std::string BuildNpcJson()
     {
         auto* pc = RE::PlayerCharacter::GetSingleton();
-        auto* lists = RE::ProcessLists::GetSingleton();
-        if (!pc || !lists) {
+        if (!pc) {
             return "{\"directorMode\":false,\"npcs\":[]}";
         }
 
-        const RE::NiPoint3 ppos = pc->GetPosition();
+        const float maxUnits = g_interactRadius.load();  // mirrors SkyrimNet's live interaction range
         std::vector<NpcEntry> entries;
 
-        for (auto& handle : lists->highActorHandles) {
-            auto ptr = handle.get();
-            RE::Actor* a = ptr.get();
-            if (!a || a == pc || a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) {
-                continue;
+        if (g_sceneValid.load()) {
+            // PRIMARY: SkyrimNet decides membership (its nearby/addressable cast). We resolve each formID
+            // to tag sleep state AND to measure the live distance ourselves from the actor's real position
+            // (fresher than the fetch-time snapshot). sa.distUnits is only a backstop if the actor is gone.
+            const RE::NiPoint3 ppos = pc->GetPosition();
+            std::lock_guard<std::mutex> lock(g_sceneMutex);
+            for (const auto& sa : g_scene) {
+                const char* st = "awake";
+                float du = sa.distUnits;
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(sa.formID)) {
+                    du = ppos.GetDistance(a->GetPosition());
+                    if (g_facAsleep && a->IsInFaction(g_facAsleep)) {
+                        st = "asleep";
+                    } else if (g_facSleeptalk && a->IsInFaction(g_facSleeptalk)) {
+                        st = "sleeptalk";
+                    }
+                }
+                char idbuf[16];
+                std::snprintf(idbuf, sizeof(idbuf), "0x%08X", sa.formID);
+                entries.push_back(NpcEntry{
+                    JsonEsc(sa.name.c_str()),
+                    idbuf,
+                    static_cast<int>(du / UNITS_PER_M + 0.5f),
+                    st });
             }
-            const char* dn = a->GetDisplayFullName();
-            if (!dn || !dn[0]) {
-                continue;  // skip unnamed/generic actors (empty-name rows)
-            }
-            const float du = ppos.GetDistance(a->GetPosition());
-            if (du > MAX_UNITS) {
-                continue;
-            }
+        } else if (auto* lists = RE::ProcessLists::GetSingleton()) {
+            // FALLBACK (SkyrimNet web server unreachable): approximate locally.
+            const RE::NiPoint3 ppos = pc->GetPosition();
+            for (auto& handle : lists->highActorHandles) {
+                auto ptr = handle.get();
+                RE::Actor* a = ptr.get();
+                if (!a || a == pc || a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) {
+                    continue;
+                }
+                const char* dn = a->GetDisplayFullName();
+                if (!dn || !dn[0]) {
+                    continue;  // skip unnamed/generic actors (empty-name rows)
+                }
+                const float du = ppos.GetDistance(a->GetPosition());
+                if (du > maxUnits) {
+                    continue;
+                }
 
-            const char* st = "awake";
-            if (g_facAsleep && a->IsInFaction(g_facAsleep)) {
-                st = "asleep";
-            } else if (g_facSleeptalk && a->IsInFaction(g_facSleeptalk)) {
-                st = "sleeptalk";
+                const char* st = "awake";
+                if (g_facAsleep && a->IsInFaction(g_facAsleep)) {
+                    st = "asleep";
+                } else if (g_facSleeptalk && a->IsInFaction(g_facSleeptalk)) {
+                    st = "sleeptalk";
+                }
+
+                char idbuf[16];
+                std::snprintf(idbuf, sizeof(idbuf), "0x%08X", a->GetFormID());
+
+                entries.push_back(NpcEntry{
+                    JsonEsc(a->GetDisplayFullName()),
+                    idbuf,
+                    static_cast<int>(du / UNITS_PER_M + 0.5f),
+                    st });
             }
-
-            char idbuf[16];
-            std::snprintf(idbuf, sizeof(idbuf), "0x%08X", a->GetFormID());
-
-            entries.push_back(NpcEntry{
-                JsonEsc(a->GetDisplayFullName()),
-                idbuf,
-                static_cast<int>(du / UNITS_PER_M + 0.5f),
-                st });
         }
 
         std::sort(entries.begin(), entries.end(),
@@ -305,6 +526,10 @@ namespace
         json += director ? "true" : "false";
         json += ",\"pauseGame\":";
         json += g_pauseGame ? "true" : "false";
+        json += ",\"whisper\":";
+        json += g_whisperOn.load() ? "true" : "false";
+        json += ",\"radius\":";
+        json += std::to_string(static_cast<int>(maxUnits / UNITS_PER_M + 0.5f));
         json += ",\"npcs\":[";
         // Player first -- selectable target for Deep Sleep / Sleep-talk (Self).
         {
@@ -351,6 +576,200 @@ namespace
         });
     }
 
+    // Background poll: while the panel is open, re-pull SkyrimNet's nearby list every second so actors
+    // that walk into/out of the scene while you reposition (esp. in RMB look mode) get added/removed. The
+    // HTTP fetch runs here (off the main thread); the resulting push is gated on !GameIsPaused so a frozen
+    // world doesn't disturb the panel. The view ignores no-op pushes (same cast set) so an open menu survives.
+    void StartActorPoll()
+    {
+        std::thread([]() {
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (!g_panelOpen.load() || !g_viewReady.load()) {
+                    continue;
+                }
+                FetchSceneBlocking();  // refresh SkyrimNet's nearby list (blocking HTTP, off-thread)
+                SKSE::GetTaskInterface()->AddTask([]() {
+                    auto* ui = RE::UI::GetSingleton();
+                    if (!ui || ui->GameIsPaused()) {
+                        return;  // frozen world -> don't disturb the panel
+                    }
+                    if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
+                        const std::string json = BuildNpcJson();
+                        g_prisma->InteropCall(g_view, "pwSetData", json.c_str());
+                    }
+                });
+            }
+        }).detach();
+    }
+
+    // Mirror SkyrimNet's whisper mode + interaction radius so the cast list matches its
+    // scene. Two reads, because they live in different places:
+    //   * /config?api=get&name=game  -> the STATIC radii (normalMaxDistance, whisperMaxDistance).
+    //   * /?api=gamemaster-status     -> the LIVE on/off (gamemaster.whisper_mode).
+    // The runtime whisper toggle is NOT reflected in /config (config.maxDistance stays at the
+    // normal value), which is why reading it alone made the pill stick at "off" -- SkyrimNet's
+    // own dashboard reads whisper_mode from the gamemaster-status endpoint. The effective range is then
+    // whisperMaxDistance when on, else normalMaxDistance (= interaction.maxDistance). We only use this for
+    // the radius pill + whisper state; the cast list comes from SkyrimNet's own decorators, which apply
+    // the awareness radius (and honour whisper) internally. Runs off the main thread (HTTP), then pulls the
+    // scene + PushData()s so the view picks up the fresh radius, whisper pill, and cast list.
+    constexpr const char* CONFIG_GAME_PATH = "/config?api=get&name=game";
+    constexpr const char* GM_STATUS_PATH = "/?api=gamemaster-status";
+
+    void FetchConfigAsync()
+    {
+        std::thread([]() {
+            // (1) Static radii from the game config group.
+            const std::string cfg = HttpRequest(L"GET", CONFIG_GAME_PATH, "");
+            if (!cfg.empty()) {
+                const size_t ip = cfg.find("\"interaction\"");
+                const size_t from = (ip == std::string::npos) ? 0 : ip;
+                const float normal = JsonNum(cfg, "normalMaxDistance", from, g_normalDist.load());
+                const float whisper = JsonNum(cfg, "whisperMaxDistance", from, g_whisperDist.load());
+                const float mult = JsonNum(cfg, "nearbyNPCAwarenessMultiplier", from, g_awarenessMult.load());
+                if (normal > 0.0f) {
+                    g_normalDist.store(normal);
+                }
+                if (whisper > 0.0f) {
+                    g_whisperDist.store(whisper);
+                }
+                if (mult > 0.0f) {
+                    g_awarenessMult.store(mult);
+                }
+            }
+            // (2) Live whisper on/off -- the runtime toggle only shows up here, not in /config.
+            const std::string gm = HttpRequest(L"GET", GM_STATUS_PATH, "");
+            if (!gm.empty()) {
+                const int wm = JsonBool(gm, "whisper_mode", -1);
+                if (wm >= 0) {
+                    g_whisperOn.store(wm == 1);
+                }
+            }
+            // Effective range follows the live state, using the static radii.
+            g_interactRadius.store(g_whisperOn.load() ? g_whisperDist.load() : g_normalDist.load());
+            logger::info("interaction: normal={} whisper={} whisper_mode={} -> radius={}",
+                         g_normalDist.load(), g_whisperDist.load(),
+                         g_whisperOn.load() ? "ON" : "off", g_interactRadius.load());
+            FetchSceneBlocking();  // pull SkyrimNet's nearby/addressable cast
+            PushData();
+        }).detach();
+    }
+
+    // Rewrite interaction.maxDistance's numeric value in a /config game-config JSON blob.
+    // Scoped to the interaction object so it never touches spatialAudio.maxDistance.
+    bool SetInteractionMaxDistance(std::string& json, int newVal)
+    {
+        const size_t ip = json.find("\"interaction\"");
+        if (ip == std::string::npos) {
+            return false;
+        }
+        const size_t kp = json.find("\"maxDistance\"", ip);
+        if (kp == std::string::npos) {
+            return false;
+        }
+        size_t c = json.find(':', kp);
+        if (c == std::string::npos) {
+            return false;
+        }
+        ++c;
+        while (c < json.size() && (json[c] == ' ' || json[c] == '\t' || json[c] == '\n' || json[c] == '\r')) {
+            ++c;
+        }
+        size_t e = c;
+        while (e < json.size() && ((json[e] >= '0' && json[e] <= '9') || json[e] == '.' || json[e] == '-' ||
+                                   json[e] == '+' || json[e] == 'e' || json[e] == 'E')) {
+            ++e;
+        }
+        if (e == c) {
+            return false;
+        }
+        json.replace(c, e - c, std::to_string(newVal));
+        return true;
+    }
+
+    // Toggle SkyrimNet whisper mode by flipping interaction.maxDistance ourselves. SkyrimNet's
+    // Papyrus TriggerToggleWhisperMode() no-ops when called from our ModEvent/menu context (works
+    // from its own wheel in gameplay, not from here), so we go straight to the config: GET the
+    // game group, swap maxDistance between normal/whisper, POST it back. SkyrimNet derives
+    // gamemaster.whisper_mode from maxDistance, so the flag + radius both update -- verified live.
+    void ToggleWhisperAsync()
+    {
+        std::thread([]() {
+            std::string resp = HttpRequest(L"GET", CONFIG_GAME_PATH, "");
+            const size_t ip = resp.find("\"interaction\"");
+            if (resp.empty() || ip == std::string::npos) {
+                logger::info("whisper toggle: config GET failed");
+                PushData();
+                return;
+            }
+            const float normal = JsonNum(resp, "normalMaxDistance", 0, 1600.0f);
+            const float whisper = JsonNum(resp, "whisperMaxDistance", 0, 200.0f);
+            const float cur = JsonNum(resp, "maxDistance", ip, normal);
+            // Currently whisper (near the whisper value)? -> go normal; else -> go whisper.
+            const int target = (cur <= (normal + whisper) * 0.5f) ? static_cast<int>(normal)
+                                                                  : static_cast<int>(whisper);
+            if (SetInteractionMaxDistance(resp, target)) {
+                HttpRequest(L"POST", "/config?api=update", resp);
+                logger::info("whisper toggle: maxDistance {} -> {}", cur, target);
+            }
+            FetchConfigAsync();  // re-read live state -> refresh pill + cast radius
+        }).detach();
+    }
+
+    bool ReadAlwaysRun() { return g_alwaysRun && g_alwaysRun->data.b; }
+
+    // Clear the "stuck in walk mode after the panel closes" latch. The Run modifier (Left Shift, held
+    // to open the panel) is a HELD-state input: the engine only flips PlayerControls::data.running when
+    // RunHandler processes the press/release transitions. If Shift's RELEASE lands while PrismaUI's focus
+    // menu owns input, RunHandler never sees it, so data.running stays latched at "walk". (This is why
+    // the old bAlwaysRunByDefault guard never helped -- that INI never actually flips; the DIAG logs
+    // proved it stayed true the whole time.) Re-derive data.running from the LIVE key state with the
+    // engine's own formula (running = runKeyHeld XOR alwaysRun) -- the same thing Caps-Lock /
+    // ToggleRunHandler does. Main thread only, after focus is released, so the keyboard poll reflects the
+    // real post-menu key state. Ref: alexoj/FixToggleWalkRun.
+    void ResyncRunState()
+    {
+        auto* pc = RE::PlayerControls::GetSingleton();
+        auto* userEvts = RE::UserEvents::GetSingleton();
+        auto* idm = RE::BSInputDeviceManager::GetSingleton();
+        auto* cmap = RE::ControlMap::GetSingleton();
+        if (!pc || !userEvts || !idm || !cmap) {
+            return;
+        }
+        const bool          alwaysRun = ReadAlwaysRun();
+        const std::uint32_t runKey = cmap->GetMappedKey(userEvts->run.c_str(), RE::INPUT_DEVICE::kKeyboard);
+        bool                runHeld = false;
+        if (runKey != RE::ControlMap::kInvalid && runKey < 256) {
+            if (auto* kb = idm->GetKeyboard()) {
+                // Read the DirectInput key-state buffer directly instead of BSWin32KeyboardDevice::IsPressed:
+                // calling that out-of-line method drags in device TUs whose virtuals are unresolved in this
+                // CommonLibSSE-NG build (link error). curState[scancode] has 0x80 set while the key is down.
+                runHeld = (kb->GetRuntimeData().curState[runKey] & 0x80) != 0;
+            }
+        }
+        const bool running = (runHeld != alwaysRun);  // XOR: with Always Run on, holding Run = walk
+        if (pc->data.running != running) {
+            logger::info("DIAG resync run/walk: held={} alwaysRun={} -> running={}", runHeld, alwaysRun, running);
+            pc->data.running = running;
+        }
+    }
+
+    // The panel is a PrismaUI focus menu: Focus captures input, Unfocus returns control to gameplay.
+    // Focus is a plain call; Unfocus additionally re-syncs the run/walk latch on the next frame (deferred
+    // so the keyboard poll has settled), clearing the stuck-walk the menu leaves when it eats the
+    // Run-modifier release. Named wrappers so the call sites read intent and stay in one place.
+    void GuardedFocus(bool a_pause)
+    {
+        g_prisma->Focus(g_view, a_pause);
+    }
+    void GuardedUnfocus()
+    {
+        const auto v = g_view;  // distinct form so the bulk call-site rewrite skips this real call
+        g_prisma->Unfocus(v);
+        SKSE::GetTaskInterface()->AddTask([]() { ResyncRunState(); });
+    }
+
     // Re-apply the focus with the current effective pause flag. PrismaUI only
     // honours pauseGame at the moment focus is (re)acquired, so changing it live
     // requires an Unfocus -> Focus cycle (a plain re-Focus is a no-op). CEF keeps
@@ -373,8 +792,8 @@ namespace
             // self-inflicted echoes (else pausing thrashes).
             g_reapplyTick = GetTickCount64();
             g_appliedPause = EffectivePause();
-            g_prisma->Unfocus(g_view);
-            g_prisma->Focus(g_view, g_appliedPause);
+            GuardedUnfocus();
+            GuardedFocus(g_appliedPause);
         });
     }
 
@@ -384,15 +803,27 @@ namespace
             return;
         }
         if (g_prisma->HasFocus(g_view)) {
+            if (auto* p = RE::PlayerCharacter::GetSingleton()) {
+                logger::info("DIAG panel CLOSE run={} walk={} alwaysRun={}",
+                             p->IsRunning(), p->IsWalking(), ReadAlwaysRun());
+            }
             g_typing = false;  // closing clears the transient typing-pause
+            g_panelOpen.store(false);
+            g_lookMode.store(false);
             g_appliedPause = false;
-            g_prisma->Unfocus(g_view);
+            GuardedUnfocus();
             g_prisma->InteropCall(g_view, "pwSetOpen", "0");  // collapse to dot
         } else {
+            if (auto* p = RE::PlayerCharacter::GetSingleton()) {
+                logger::info("DIAG panel OPEN pause={} run={} walk={} alwaysRun={}", EffectivePause(),
+                             p->IsRunning(), p->IsWalking(), ReadAlwaysRun());
+            }
+            g_panelOpen.store(true);  // panel now owns keyboard (input hook filters non-typing keys)
             g_appliedPause = EffectivePause();
-            g_prisma->Focus(g_view, g_appliedPause);
+            GuardedFocus(g_appliedPause);
             g_prisma->InteropCall(g_view, "pwSetOpen", "1");  // expand panel
             PushData();
+            FetchConfigAsync();  // re-sync radius/whisper (may have changed via SkyrimNet's own hotkey)
         }
     }
 
@@ -428,8 +859,10 @@ namespace
         SKSE::GetTaskInterface()->AddTask([]() {
             if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
                 g_typing = false;
+                g_panelOpen.store(false);
+                g_lookMode.store(false);
                 g_appliedPause = false;
-                g_prisma->Unfocus(g_view);
+                GuardedUnfocus();
                 g_prisma->InteropCall(g_view, "pwSetOpen", "0");
             }
         });
@@ -483,11 +916,210 @@ namespace
         EscInputSink() = default;
     };
 
+    // ---- Input-dispatch hook: steal keys from other consumers while the panel owns input ----
+    //
+    // A BSTEventSink<InputEvent*> CANNOT block input from other consumers: MenuControls,
+    // PlayerControls, AND SKSE's RegisterForKey are all sibling sinks on the single
+    // BSInputDeviceManager event source, so no return value gates them. PrismaUI's focus
+    // menu only captures keys the CEF page actually consumes (i.e. while you're typing in a
+    // field) -- unhandled keys fall through to the game and other mods. To suppress keys
+    // while the panel is open but NOT typing, we hook the dispatch call inside
+    // BSInputDeviceManager::PollInputDevices and UNLINK keyboard events from the InputEvent
+    // linked list before the original dispatcher delivers it -- making them invisible to
+    // every consumer at once (RELOCATION_ID(67315,68617)+0x7B; the Wheeler/TDM hook point).
+    //
+    // Gating: only filter when the panel is expanded/focused AND the text box is NOT focused.
+    // While typing, PrismaUI's focus menu already routes keys into the field, so we leave the
+    // list untouched (filtering it would break typing, since our detour runs before the menu
+    // sink). Escape (DIK 0x01) is always whitelisted so EscInputSink can still close the panel.
+    //
+    // RMB "look/move" mode: holding right mouse while the panel is open momentarily Unfocuses
+    // the view (kept SHOWN) so the game restores mouselook + WASD movement -- reposition for the
+    // scene without closing the panel. While in look mode we stop filtering keyboard (so you can
+    // move) but DO swallow LMB/RMB down/held (so you only pan the camera -- no stray attacks, and
+    // RMB itself doesn't trigger block). Releasing RMB re-Focuses and returns the cursor.
+    struct InputDispatchHook
+    {
+        // Mouse button idCodes (BSWin32MouseDevice ordering): 0 = left, 1 = right.
+        static constexpr std::uint32_t kMouseLeft = 0;
+        static constexpr std::uint32_t kMouseRight = 1;
+
+        // Unlink every button event matching `shouldDrop` from the list, before any sink sees it.
+        static void Unlink(RE::InputEvent** a_evns, bool (*shouldDrop)(RE::ButtonEvent*))
+        {
+            if (!a_evns) {
+                return;
+            }
+            RE::InputEvent* prev = nullptr;
+            RE::InputEvent* cur = *a_evns;
+            while (cur) {
+                bool drop = false;
+                if (cur->eventType == RE::INPUT_EVENT_TYPE::kButton) {
+                    if (auto* be = cur->AsButtonEvent()) {
+                        drop = shouldDrop(be);
+                    }
+                }
+                if (drop) {
+                    if (prev) {
+                        prev->next = cur->next;
+                    } else {
+                        *a_evns = cur->next;
+                    }
+                    cur = cur->next;  // node unlinked; prev stays put
+                } else {
+                    prev = cur;
+                    cur = cur->next;
+                }
+            }
+        }
+
+        // Tracks which scancodes we "own" -- keys whose DOWN happened while we were capturing.
+        // A key already held when capture begins is the game's (e.g. the Left Shift held to open
+        // the panel, which is also Skyrim's walk modifier); we must pass ALL its events or its
+        // run/walk state gets stuck. Only fresh presses under capture are fully swallowed.
+        static inline bool g_owned[256] = {};
+        static inline bool g_wasFiltering = false;
+
+        // Normal mode keyboard suppression (stateful -- see g_owned). Escape is always passed so
+        // EscInputSink can close the panel.
+        static void FilterKeyboard(RE::InputEvent** a_evns)
+        {
+            if (!a_evns) {
+                return;
+            }
+            RE::InputEvent* prev = nullptr;
+            RE::InputEvent* cur = *a_evns;
+            while (cur) {
+                bool drop = false;
+                if (cur->eventType == RE::INPUT_EVENT_TYPE::kButton) {
+                    if (auto* be = cur->AsButtonEvent();
+                        be && be->GetDevice() == RE::INPUT_DEVICE::kKeyboard) {
+                        const std::uint32_t sc = be->GetIDCode();
+                        if (sc < 256 && sc != 0x01 /* DIK_ESCAPE */) {
+                            if (be->IsDown()) {
+                                g_owned[sc] = true;   // fresh press under capture -> ours
+                                drop = true;
+                            } else if (be->IsHeld()) {
+                                drop = g_owned[sc];   // ours: swallow; pre-held (game's): pass
+                            } else if (be->IsUp()) {
+                                if (g_owned[sc]) {     // our press ends -> swallow + release ownership
+                                    drop = true;
+                                    g_owned[sc] = false;
+                                }
+                                // pre-held key releasing -> PASS so the game completes its press
+                            }
+                        }
+                    }
+                }
+                if (drop) {
+                    if (prev) {
+                        prev->next = cur->next;
+                    } else {
+                        *a_evns = cur->next;
+                    }
+                    cur = cur->next;
+                } else {
+                    prev = cur;
+                    cur = cur->next;
+                }
+            }
+        }
+        // Look mode: swallow LMB/RMB down/held so repositioning doesn't attack/block/cast.
+        static bool DropMouseClick(RE::ButtonEvent* be)
+        {
+            return be->GetDevice() == RE::INPUT_DEVICE::kMouse &&
+                   (be->GetIDCode() == kMouseLeft || be->GetIDCode() == kMouseRight) && !be->IsUp();
+        }
+
+        static void EnterLook()
+        {
+            g_lookMode.store(true);  // flip immediately so this frame stops filtering keyboard
+            logger::info("DIAG lookMode ENTER (Unfocus)");
+            SKSE::GetTaskInterface()->AddTask([]() {
+                if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view) &&
+                    g_prisma->HasFocus(g_view)) {
+                    GuardedUnfocus();  // drop focus menu -> game regains mouselook + movement
+                }
+            });
+        }
+        static void ExitLook()
+        {
+            g_lookMode.store(false);
+            logger::info("DIAG lookMode EXIT (Focus)");
+            SKSE::GetTaskInterface()->AddTask([]() {
+                if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view) &&
+                    g_panelOpen.load() && !g_prisma->HasFocus(g_view)) {
+                    g_appliedPause = EffectivePause();
+                    GuardedFocus(g_appliedPause);  // restore cursor + panel interaction
+                }
+            });
+        }
+
+        static void Dispatch(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent** a_evns)
+        {
+            // Runs on the main thread (game loop). Reads atomics only -- PrismaUI calls are deferred.
+            // 1) RMB transitions toggle look mode (only while the panel is open and not typing).
+            if (a_evns) {
+                for (auto* e = *a_evns; e; e = e->next) {
+                    if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) {
+                        continue;
+                    }
+                    auto* be = e->AsButtonEvent();
+                    if (!be || be->GetDevice() != RE::INPUT_DEVICE::kMouse ||
+                        be->GetIDCode() != kMouseRight) {
+                        continue;
+                    }
+                    if (be->IsDown() && g_panelOpen.load() && !g_typing.load() && !g_lookMode.load()) {
+                        EnterLook();
+                    } else if (be->IsUp() && g_lookMode.load()) {
+                        ExitLook();
+                    }
+                }
+            }
+            // 2) Filter for the current mode.
+            const bool kbFilter = g_captureKeys && g_panelOpen.load() && !g_typing.load() && !g_lookMode.load();
+            if (g_wasFiltering && !kbFilter) {
+                for (auto& b : g_owned) {  // leaving keyboard-capture: forget owned presses
+                    b = false;
+                }
+            }
+            g_wasFiltering = kbFilter;
+
+            if (g_lookMode.load()) {
+                if (g_panelOpen.load()) {
+                    Unlink(a_evns, &DropMouseClick);  // swallow clicks; keyboard + mouselook pass through
+                }
+            } else if (kbFilter) {
+                FilterKeyboard(a_evns);
+            }
+            _orig(a_dispatcher, a_evns);
+        }
+
+        static void Install()
+        {
+            // 0x7B into PollInputDevices = the call that hands the InputEvent list to sinks.
+            REL::Relocation<std::uintptr_t> hookSite{ REL::RelocationID(67315, 68617), 0x7B };
+            auto& trampoline = SKSE::GetTrampoline();
+            _orig = trampoline.write_call<5>(hookSite.address(), &Dispatch);
+            logger::info("Input-dispatch hook installed @ {:X}", hookSite.address());
+        }
+
+    private:
+        static inline REL::Relocation<decltype(&Dispatch)> _orig;
+    };
+
     // ---- JS listener callbacks (free functions: no captures) ----
     void OnJsCommand(const char* a_arg)
     {
-        logger::info("JS command -> {}", a_arg ? a_arg : "(null)");
-        SendCommandToPapyrus(a_arg ? a_arg : "");
+        const std::string s = a_arg ? a_arg : "";
+        logger::info("JS command -> {}", s.empty() ? "(null)" : s.c_str());
+        // Whisper is handled in-DLL over HTTP (the Papyrus native no-ops from our context);
+        // everything else still routes to PW_Controller.
+        if (s.substr(0, s.find('|')) == "whisper") {
+            ToggleWhisperAsync();
+            return;
+        }
+        SendCommandToPapyrus(s);
     }
 
     void OnJsClose(const char*)
@@ -499,14 +1131,16 @@ namespace
         SKSE::GetTaskInterface()->AddTask([]() {
             if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
                 g_typing = false;
+                g_panelOpen.store(false);
+                g_lookMode.store(false);
                 g_appliedPause = false;
-                g_prisma->Unfocus(g_view);
+                GuardedUnfocus();
                 g_prisma->InteropCall(g_view, "pwSetOpen", "0");  // collapse to dot
             }
         });
     }
 
-    void OnJsRefresh(const char*) { PushData(); }
+    void OnJsRefresh(const char*) { FetchConfigAsync(); }  // re-pull live radius + whisper, then PushData
 
     // Live settings from the panel. arg = "key|value", e.g. "pause|1".
     // Pure C++ state (no Papyrus involved); applied live + persisted to the ini.
@@ -604,8 +1238,19 @@ namespace
         }
 
         LookupFactions();
+        // bAlwaysRunByDefault lives in the PREFS collection (SkyrimPrefs.ini), not GetINISetting --
+        // reading it from the wrong place was why the run/walk guard never fired.
+        if (auto* prefs = RE::INIPrefSettingCollection::GetSingleton()) {
+            g_alwaysRun = prefs->GetSetting("bAlwaysRunByDefault:Controls");
+        }
+        if (!g_alwaysRun) {
+            g_alwaysRun = RE::GetINISetting("bAlwaysRunByDefault:Controls");
+        }
+        logger::info("alwaysRun setting: {}", g_alwaysRun ? "found" : "NULL");
         ReadWebServerConfig();
         g_pauseGame = ReadPauseGame();
+        g_captureKeys = GetPrivateProfileIntA("Behavior", "CaptureKeys", 0, INI_PATH) != 0;
+        logger::info("CaptureKeys={}", g_captureKeys);
 
         g_view = g_prisma->CreateView("Playwright/index.html", [](PrismaView a_view) {
             logger::info("Playwright view DOM ready ({})", a_view);
@@ -625,6 +1270,7 @@ namespace
             g_viewReady.store(true);
             g_prisma->InteropCall(a_view, "pwSetOpen", "0");
             g_prisma->InteropCall(a_view, "pwSetDirector", IsDirectorOn() ? "1" : "0");
+            FetchConfigAsync();  // prime interaction radius + whisper state from SkyrimNet
             logger::info("Playwright JS listeners registered.");
         });
 
@@ -639,6 +1285,13 @@ namespace
         if (auto* idm = RE::BSInputDeviceManager::GetSingleton()) {
             idm->AddEventSink(EscInputSink::GetSingleton());
         }
+
+        // Hook the input dispatch so the panel can steal keys from other mods/vanilla while
+        // open-and-not-typing (a plain sink can't -- see InputDispatchHook).
+        InputDispatchHook::Install();
+
+        // 1 Hz cast-list refresh while open + unpaused (keeps the list current as you reposition).
+        StartActorPoll();
 
         logger::info("Playwright PrismaUI bridge initialized.");
     }

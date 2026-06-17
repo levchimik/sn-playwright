@@ -12,5 +12,5 @@ Think internally as {{ decnpc(npc.UUID).name }}. React to what just happened and
 {% elif render_mode == "book" %}
 Reflect on what you just read. Summarize key points and consider what they mean for you personally.
 {% else %}
-Respond as {{ decnpc(npc.UUID).name }} in conversation.{% if responseTarget and responseTarget.UUID != 0 and not (pwExcluded and responseTarget.type == "player") %} You are speaking to {% if responseTarget.type == "player" %}{{ player.name }}{% else if responseTarget.type == "npc" %}{{ decnpc(responseTarget.UUID).name }}{% endif %}.{% endif %}{% if pwExcluded %} {{ player.name }} is absent from the scene — don't address them directly. They may come up if relevant; otherwise speak with the other NPCs present.{% endif %}
+Respond as {{ decnpc(npc.UUID).name }} in conversation.{% if responseTarget and responseTarget.UUID != 0 and not (pwExcluded and responseTarget.type == "player") %} You are speaking to {% if responseTarget.type == "player" %}{{ player.name }}{% else if responseTarget.type == "npc" %}{{ decnpc(responseTarget.UUID).name }}{% endif %}.{% endif %}{% if pwExcluded %} **{{ player.name }} IS NOT PRESENT** — do NOT address them directly. You MAY mention them if they are relevant; otherwise speak with the other NPCs present.{% endif %}
 {% endif %}

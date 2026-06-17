@@ -511,6 +511,17 @@ Function NarrateText(String narration, Actor preferred)
     EndIf
 EndFunction
 
+; System/meta event (panel "System" button): inject a neutral context note that NPCs
+; become aware of for context but do NOT react to (RegisterPersistentEvent). Surfaces in
+; the log as a "System" entry. When a target is selected the note is associated with them
+; (targetActor); otherwise it's a general world/system note.
+Function SystemEvent(String content, Actor target)
+    If content != ""
+        SkyrimNetApi.RegisterPersistentEvent(content, None, target)
+        Debug.Notification("System event sent")
+    EndIf
+EndFunction
+
 ; ------------------------------------------------------------------ say (literal NPC line, text-only)
 ; Inject your exact words as the crosshair NPC's line, verbatim, no LLM. NOTE: this is
 ; recorded into their dialogue history/context (subtitle + memory) but NOT voiced —
@@ -566,6 +577,16 @@ Function ThinkTo(Actor t, String thought)
         String data = "{\"npc_name\":\"" + SeverActionsNative.EscapeJsonString(t.GetDisplayName()) + "\",\"thoughts\":\"" + SeverActionsNative.EscapeJsonString(thought) + "\"}"
         SkyrimNetApi.RegisterEvent("npc_thoughts", data, t, None)
         Debug.Notification(t.GetDisplayName() + " thinks it")
+    EndIf
+EndFunction
+
+; LLM counterpart of ThinkTo (panel Transform-mode ON): hand the gist to SkyrimNet,
+; which generates an unvoiced thought in the NPC's own voice and persists it privately
+; (GenerateNPCThought). Skips silently for the player or a dead/sleeping actor.
+Function ThinkLLM(Actor t, String hint)
+    If t && hint != ""
+        SkyrimNetApi.GenerateNPCThought(t, hint)
+        Debug.Notification(t.GetDisplayName() + " thinks (LLM)")
     EndIf
 EndFunction
 
@@ -752,9 +773,15 @@ EndFunction
 ;   text: free text (may itself contain '|', so it's everything after field 2).
 ; Actions map onto the same cores the wheel/hotkeys use, so behaviour is identical.
 Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akSender)
+    ; Panel payload: "action|targetId|transform|text" (text is everything after field 3,
+    ; so it may itself contain '|'). transform == "1" routes the text actions through the
+    ; LLM (rephrased / voiced / generated); otherwise the literal/verbatim path is used.
+    ; Quick actions (prompt/sleep/...) send only "action|targetId|", so transform and text
+    ; come back empty — they ignore both.
     String action = PipeField(strArg, 0)
     String targetTok = PipeField(strArg, 1)
-    String text = PipeRest(strArg, 2)
+    Bool xform = (PipeField(strArg, 2) == "1")
+    String text = PipeRest(strArg, 3)
     Actor t = ResolveTarget(targetTok)
     Actor pl = Game.GetPlayer()
     ; Diagnostic (v0.6): confirms the JS->C++->Papyrus bridge delivered the click.
@@ -762,13 +789,21 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
 
     If action == "director"
         ToggleDirector()
+    ElseIf action == "whisper"
+        SkyrimNetApi.TriggerToggleWhisperMode()   ; global: swaps interaction.maxDistance (normal <-> whisper)
     ElseIf action == "prompt"
         PromptActor(t)
     ElseIf action == "narrate"
-        NarrateText(text, t)
+        NarrateText(text, t)            ; a nearby NPC voices/reacts to the scene event (LLM)
+    ElseIf action == "system"
+        SystemEvent(text, t)            ; neutral system/context note; no LLM reaction
     ElseIf action == "say"
         If t && t != pl
-            SayTo(t, text)
+            If xform
+                TransformTo(t, text)    ; LLM rephrases in the NPC's voice (voiced)
+            Else
+                SayTo(t, text)          ; literal verbatim line (not voiced)
+            EndIf
         EndIf
     ElseIf action == "transform"
         If t && t != pl
@@ -776,7 +811,11 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
         EndIf
     ElseIf action == "think"
         If t && t != pl
-            ThinkTo(t, text)
+            If xform
+                ThinkLLM(t, text)       ; LLM generates the thought from your gist
+            Else
+                ThinkTo(t, text)        ; literal verbatim thought
+            EndIf
         EndIf
     ElseIf action == "sleep"
         If t

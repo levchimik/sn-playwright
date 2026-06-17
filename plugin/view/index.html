@@ -102,10 +102,11 @@
   .logmsg .edta:focus{outline:none;}
   .logmsg .edrow{display:flex;gap:6px;margin-top:5px;}
   header{
-    display:flex;align-items:center;gap:10px;
+    display:flex;align-items:center;flex-wrap:wrap;gap:7px 8px;
     padding:14px 16px;border-bottom:1px solid var(--line);
   }
   header .title{font-size:18px;letter-spacing:3px;font-weight:600;color:var(--accent);flex:1;}
+  .pillbar{flex-basis:100%;display:flex;align-items:center;gap:8px;}
   header .title small{display:block;font-size:10px;letter-spacing:1px;color:var(--muted);font-weight:400;}
   .pill{
     font-size:11px;padding:3px 9px;border-radius:10px;border:1px solid var(--line);
@@ -135,15 +136,28 @@
   #npcs::-webkit-scrollbar{width:8px;}
   #npcs::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:4px;}
   .npc{
-    display:flex;align-items:center;gap:10px;
     padding:9px 12px;margin:3px 0;border-radius:7px;cursor:pointer;
     border:1px solid transparent;
   }
   .npc:hover{background:var(--bg2);}
   .npc.sel{background:var(--sel);border-color:var(--accent);}
+  .npchead{display:flex;align-items:center;gap:10px;}
   .npc .nm{flex:1;font-size:14px;}
   .npc .nm .dist{color:var(--muted);font-size:11px;margin-left:6px;}
   .npc.you .nm{color:var(--accent2);}
+  /* Per-row "⋯" trigger for the target-only action menu. */
+  .npcmenu{font-size:17px;line-height:1;color:var(--muted);cursor:pointer;padding:0 6px;border-radius:5px;}
+  .npcmenu:hover{color:var(--accent);background:var(--bg);}
+  /* Floating context menu (Windows-style) for a character's target-only actions. */
+  .ctxmenu{
+    position:fixed;display:none;flex-direction:column;min-width:150px;
+    background:var(--bg);border:1px solid var(--line);border-radius:8px;
+    box-shadow:0 10px 32px rgba(0,0,0,0.6);padding:4px;z-index:10000;pointer-events:auto;
+  }
+  .ctxmenu.open{display:flex;}
+  .ctxitem{font-size:12px;padding:8px 12px;border-radius:5px;cursor:pointer;color:var(--fg);white-space:nowrap;}
+  .ctxitem:hover{background:var(--bg2);color:var(--accent);}
+  .ctxitem.danger:hover{color:var(--danger);}
   .badge{font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(255,255,255,0.08);color:var(--muted);}
   .badge.asleep{background:rgba(127,168,214,0.18);color:var(--accent2);}
   .badge.sleeptalk{background:rgba(201,161,74,0.18);color:var(--accent);}
@@ -157,7 +171,7 @@
     padding:10px 12px;font-size:14px;line-height:1.4;user-select:text;
   }
   #text:focus{outline:none;border-color:var(--accent);}
-  .target-line{font-size:12px;color:var(--muted);margin:8px 2px 10px;}
+  .target-line{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted);margin:8px 2px 10px;}
   .target-line b{color:var(--fg);}
   .actions{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;}
   .actbtn{
@@ -167,7 +181,6 @@
   .actbtn:hover:not(.disabled){border-color:var(--accent);color:var(--accent);}
   .actbtn.disabled{opacity:0.32;cursor:default;}
   .actbtn small{display:block;font-size:9px;color:var(--muted);margin-top:2px;}
-  .actbtn.wake{grid-column:span 2;}
   .actbtn.danger:hover:not(.disabled){border-color:var(--danger);color:var(--danger);}
 </style>
 </head>
@@ -176,29 +189,31 @@
 <div id="panel" tabindex="-1">
   <header>
     <div class="title">PLAYWRIGHT<small>scene control</small></div>
-    <div id="dirPill" class="pill" onclick="toggleDirector()">Director: off</div>
-    <div id="pausePill" class="pill" onclick="togglePause()">Pause: off</div>
-    <div id="logPill" class="pill" onclick="toggleLog()">Log</div>
     <div class="closebtn" onclick="closePanel()">&#10005;</div>
+    <div class="pillbar">
+      <div id="dirPill" class="pill" onclick="toggleDirector()">Director: off</div>
+      <div id="whisperPill" class="pill" onclick="toggleWhisper()" title="Mirrors SkyrimNet's whisper mode: narrows the interaction range (who hears / is in the scene) from the normal radius to the whisper radius. Reflects SkyrimNet's real state, even if you toggled it with SkyrimNet's own hotkey.">Whisper: off</div>
+      <div id="pausePill" class="pill" onclick="togglePause()">Pause: off</div>
+      <div id="logPill" class="pill" onclick="toggleLog()">Log</div>
+    </div>
   </header>
 
   <div id="dirBanner" class="dir-banner"><span class="dot"></span>Director Mode &mdash; you've left the scene</div>
 
-  <div class="section-label">Nearby cast &mdash; click to target</div>
+  <div class="section-label">Nearby cast &mdash; click to select &amp; act</div>
   <div id="npcs"><div class="empty">Loading nearby people&hellip;</div></div>
 
   <footer>
     <textarea id="text" placeholder="Line / thought / scene event&hellip;"></textarea>
-    <div class="target-line">Target: <b id="targetName">none</b></div>
+    <div class="target-line">
+      <span>Target: <b id="targetName">none</b></span>
+      <div id="xformPill" class="pill" onclick="toggleTransform()" title="On: the LLM rephrases your text in-character (voiced/generated). Off: used literally / verbatim.">Transform: off</div>
+    </div>
     <div class="actions">
-      <div class="actbtn" data-act="say"       data-need="target,text" onclick="fire(this)">Say<small>verbatim</small></div>
-      <div class="actbtn" data-act="transform" data-need="target,text" onclick="fire(this)">Transform<small>LLM voice</small></div>
-      <div class="actbtn" data-act="think"     data-need="target,text" onclick="fire(this)">Think<small>thought</small></div>
-      <div class="actbtn" data-act="prompt"    data-need="target"      onclick="fire(this)">Prompt<small>nudge</small></div>
-      <div class="actbtn" data-act="narrate"   data-need="text"        onclick="fire(this)">Narrate<small>scene</small></div>
-      <div class="actbtn" data-act="sleeptalk" data-need="target"      onclick="fire(this)">Sleep-talk<small>murmur</small></div>
-      <div class="actbtn" data-act="sleep"     data-need="target"      onclick="fire(this)">Deep Sleep<small>out cold</small></div>
-      <div class="actbtn wake" data-act="wake" data-need="target"      onclick="fire(this)">Wake<small>rouse</small></div>
+      <div class="actbtn" data-act="say"     data-need="target,text" data-suboff="verbatim" data-subon="LLM voice"  onclick="fire(this)">Say<small>verbatim</small></div>
+      <div class="actbtn" data-act="think"   data-need="target,text" data-suboff="literal"  data-subon="LLM"        onclick="fire(this)">Think<small>literal</small></div>
+      <div class="actbtn" data-act="narrate" data-need="text"        onclick="fire(this)">Narrate<small>reaction</small></div>
+      <div class="actbtn" data-act="system"  data-need="text"        onclick="fire(this)">System<small>context</small></div>
     </div>
   </footer>
 </div>
@@ -214,6 +229,7 @@
 </div>
 
 <div id="dot" title="Playwright"></div>
+<div id="ctxMenu" class="ctxmenu"></div>
 
 <script>
   // PrismaUI RegisterJSListener targets are FLAT globals (window.pwCommand, ...).
@@ -425,19 +441,52 @@
     document.getElementById("dot").classList.toggle("on", (v==="1"||v===1||v===true));
   };
 
-  var state = { npcs:[], target:null, targetName:"none", director:false, pause:false };
+  var state = { npcs:[], target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false };
+  try{ state.transform = localStorage.getItem("pwTransform")==="1"; }catch(e){}
+
+  // Transform mode: when on, the text actions (Say/Think/Narrate) route through the
+  // LLM (rephrased / generated / voiced); when off they're literal/verbatim. The flag
+  // rides along in each command payload; Papyrus picks the path.
+  function toggleTransform(){
+    state.transform = !state.transform;
+    try{ localStorage.setItem("pwTransform", state.transform?"1":"0"); }catch(e){}
+    updateXform();
+  }
+  function updateXform(){
+    var pill = document.getElementById("xformPill");
+    pill.textContent = "Transform: " + (state.transform ? "on" : "off");
+    pill.className = "pill" + (state.transform ? " on" : "");
+    document.querySelectorAll(".actions .actbtn").forEach(function(b){
+      if(!b.hasAttribute("data-subon")) return;   // not transform-aware (e.g. System)
+      var s = b.querySelector("small"); if(!s) return;
+      s.textContent = state.transform ? (b.getAttribute("data-subon")||"") : (b.getAttribute("data-suboff")||"");
+    });
+  }
 
   // ---- C++ -> JS : push nearby-NPC data (called via InteropCall) ----
   window.pwSetData = function(json){
     try{
       var d = (typeof json === "string") ? JSON.parse(json) : json;
-      state.npcs = d.npcs || [];
+      var npcs = d.npcs || [];
+      // Render-worthy signature: header flags + the SET of actors and their states — NOT distance,
+      // which jitters every poll. Lets the 1 Hz poll skip the DOM rebuild when nothing meaningful
+      // changed, so an open ⋯ menu / selection survives while you reposition.
+      var sig = (d.directorMode?1:0)+"|"+(d.pauseGame?1:0)+"|"+(d.whisper?1:0)+"|"+
+                npcs.map(function(n){return n.id+":"+n.state+":"+n.dist+(n.player?"P":"");}).join(",");
+      state.npcs = npcs;
       state.director = !!d.directorMode;
       state.pause = !!d.pauseGame;
+      state.whisper = !!d.whisper;
+      state.radius = d.radius;   // meters; for the pill tooltip / label
       // keep selection if the target is still present
-      if(state.target && !state.npcs.some(function(n){return n.id===state.target;})){
+      if(state.target && !npcs.some(function(n){return n.id===state.target;})){
         state.target = null; state.targetName = "none";
       }
+      if(sig === state._sig) return;   // nothing changed (incl. distance) -> skip
+      // don't yank an open ⋯ menu out from under the user mid-interaction; refresh once it closes
+      var cm = document.getElementById("ctxMenu");
+      if(cm && cm.classList.contains("open")) return;
+      state._sig = sig;
       render();
     }catch(e){ console.error("pwSetData parse error", e, json); }
   };
@@ -456,21 +505,37 @@
     pp.textContent = "Pause: " + (state.pause ? "on" : "off");
     pp.className = "pill" + (state.pause ? " on" : "");
 
+    var wp = document.getElementById("whisperPill");
+    wp.textContent = "Whisper: " + (state.whisper ? "on" : "off");
+    wp.className = "pill" + (state.whisper ? " on" : "");
+    if(state.radius != null) wp.title = "Mirrors SkyrimNet's whisper mode. Interaction range now ~" + state.radius + " m (who hears / is in the scene). Toggle to switch normal ↔ whisper; reflects SkyrimNet's real state even if toggled via its own hotkey.";
+
+    closeCtxMenu();   // any open action menu is stale once the list re-renders
     var box = document.getElementById("npcs");
     box.innerHTML = "";
     if(!state.npcs.length){
       box.innerHTML = '<div class="empty">No SkyrimNet people nearby.</div>';
     } else {
       state.npcs.forEach(function(n){
+        var selected = state.target===n.id;
         var row = document.createElement("div");
-        row.className = "npc" + (n.player ? " you":"") + (state.target===n.id ? " sel":"");
+        row.className = "npc" + (n.player ? " you":"") + (selected ? " sel":"");
         var badge = "";
         if(n.state==="asleep")    badge = '<span class="badge asleep">asleep</span>';
         else if(n.state==="sleeptalk") badge = '<span class="badge sleeptalk">murmuring</span>';
         if(n.crosshair) badge += ' <span class="badge xhair">crosshair</span>';
         var dist = (n.dist!=null && !n.player) ? '<span class="dist">'+n.dist+'m</span>' : '';
-        row.innerHTML = '<span class="nm">'+esc(n.name)+dist+'</span>'+badge;
-        row.onclick = function(){ selectTarget(n); };
+        var head = document.createElement("div");
+        head.className = "npchead";
+        head.innerHTML = '<span class="nm">'+esc(n.name)+dist+'</span>'+badge;
+        head.onclick = function(){ selectTarget(n); };
+        // "⋯" opens the target-only action menu for THIS character (independent of
+        // selection; stopPropagation so it doesn't also toggle the row's target).
+        var menuBtn = document.createElement("div");
+        menuBtn.className = "npcmenu"; menuBtn.textContent = "⋯"; menuBtn.title = "Actions";
+        menuBtn.onclick = function(e){ e.stopPropagation(); openCtxMenu(n, menuBtn); };
+        head.appendChild(menuBtn);
+        row.appendChild(head);
         box.appendChild(row);
       });
     }
@@ -478,8 +543,50 @@
     document.getElementById("targetName").textContent = state.targetName;
   }
 
+  // ---- per-character target-only action menu (Prompt + state-aware sleep) ----
+  function openCtxMenu(n, anchorEl){
+    var m = document.getElementById("ctxMenu");
+    m.innerHTML = "";
+    function item(label, act, cls){
+      var d = document.createElement("div");
+      d.className = "ctxitem" + (cls ? " "+cls : "");
+      d.textContent = label;
+      d.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); quickFire(act, n); };
+      m.appendChild(d);
+    }
+    item(n.player ? "Prompt (you)" : "Prompt", "prompt");
+    if(n.state==="asleep" || n.state==="sleeptalk"){
+      item("Wake", "wake");
+    } else {
+      item("Deep Sleep", "sleep", "danger");
+      item("Sleep-talk", "sleeptalk");
+    }
+    // Anchor below the ⋯, clamped to the viewport.
+    var r = anchorEl.getBoundingClientRect();
+    m.classList.add("open");                       // show first so we can measure
+    var w = m.offsetWidth || 160, h = m.offsetHeight || 120;
+    var left = Math.min(r.left, window.innerWidth - w - 6);
+    var top  = (r.bottom + 4 + h <= window.innerHeight) ? r.bottom + 4 : r.top - h - 4;
+    m.style.left = Math.max(6, left) + "px";
+    m.style.top  = Math.max(6, top) + "px";
+  }
+  function closeCtxMenu(){ document.getElementById("ctxMenu").classList.remove("open"); }
+  // Dismiss the menu on any outside click.
+  document.addEventListener("pointerdown", function(e){
+    var m = document.getElementById("ctxMenu");
+    if(m.classList.contains("open") && !m.contains(e.target) && !(e.target.closest && e.target.closest(".npcmenu"))) closeCtxMenu();
+  });
+
+  function quickFire(act, n){
+    send(act + "|" + n.id + "|");
+    // sleep/wake change badges -- re-pull after Papyrus runs
+    if(["sleep","sleeptalk","wake"].indexOf(act)>=0) scheduleRefresh();
+  }
+
   function selectTarget(n){
-    state.target = n.id; state.targetName = n.name;
+    // Click the already-selected row to collapse its quick actions.
+    if(state.target===n.id){ state.target=null; state.targetName="none"; }
+    else { state.target=n.id; state.targetName=n.name; }
     render();
   }
 
@@ -500,19 +607,25 @@
     var act = btn.getAttribute("data-act");
     var text = document.getElementById("text").value.trim();
     var target = state.target || "";
-    send(act + "|" + target + "|" + text);
-    // clear the text box after a spoken/thought action
-    if(["say","transform","think","narrate"].indexOf(act)>=0){
-      document.getElementById("text").value = "";
-      refreshButtons();
-    }
-    // sleep/wake change badges -- re-pull after Papyrus has executed
-    if(["sleep","sleeptalk","wake"].indexOf(act)>=0) scheduleRefresh();
+    // payload: action|target|transform|text  (text last so it may contain '|')
+    send(act + "|" + target + "|" + (state.transform ? "1" : "0") + "|" + text);
+    // clear the text box after a spoken/thought/narrate action
+    document.getElementById("text").value = "";
+    refreshButtons();
   }
 
   function toggleDirector(){
     send("director||");
     state.director = !state.director;   // optimistic; the next push confirms
+    render();
+    scheduleRefresh();
+  }
+
+  // Whisper mode is owned by SkyrimNet (global). We just fire its toggle and let the
+  // config re-fetch (scheduleRefresh -> pwRefresh) report back the real state + radius.
+  function toggleWhisper(){
+    send("whisper||");
+    state.whisper = !state.whisper;     // optimistic; the config re-fetch confirms
     render();
     scheduleRefresh();
   }
@@ -533,6 +646,8 @@
   function send(payload){ window.pwCommand(payload); }
 
   function esc(s){ return (s||"").replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];}); }
+
+  updateXform();   // reflect the restored Transform-mode state on the pill + subtitles
 
   var textBox = document.getElementById("text");
   textBox.addEventListener("input", refreshButtons);

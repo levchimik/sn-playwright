@@ -11,7 +11,7 @@
 {% endblock %}
 
 {% block nearbyNpcs %}
-    {# PW: the player is omitted from get_nearby_npc_list, so an NPC-perspective scene (e.g. a prompted speaker) never "sees" the player. Add them back as a nearby person when this context is built for another actor and the player hasn't left the scene via Director Mode. #}
+    {# PW: the player is omitted from get_nearby_npc_list, so an NPC-perspective scene (e.g. a prompted speaker) never "sees" the player. Add them back as a nearby person when this context is built for another actor and the player isn't excluded by Director Mode. #}
     {% set showPlayer = sourceEntity and sourceEntity.UUID != player.UUID and not is_in_faction(player.UUID, "SkyrimNet_ActorBlacklistFaction") %}
     {% if length(nearby_npcs) > 0 or showPlayer %}
         {% for npc in nearby_npcs %}

@@ -9,7 +9,7 @@
 {% set noPlayerTarget = pwExcluded or playerAsleep %}
 ## Task
 {% if pwExcluded %}
-**DIRECTOR MODE — {{ player.name }} IS ABSENT.** {{ player.name }} has left the scene and is not present: they cannot be seen, heard, or spoken to. The token `player` is INVALID this turn — NEVER output it as speaker or target. NPCs may speak ONLY to one another (`[NPC]>[NPC]`). Never address {{ player.name }}, wait for them, comment on their absence, or pivot the conversation toward them. If no NPC has a genuine reason to speak to another NPC, output `0`.
+**DIRECTOR MODE — {{ player.name }} IS NOT PRESENT.** They cannot be seen, heard, or spoken to. The token `player` is INVALID this turn — NEVER output it as speaker or target. NPCs may speak ONLY to one another (`[NPC]>[NPC]`). Never address {{ player.name }}, wait for them, comment on them not being here, or pivot the conversation toward them. If no NPC has a genuine reason to speak to another NPC, output `0`.
 {% endif %}
 {% if playerAsleep and not pwExcluded %}
 **{{ player.name }} IS ASLEEP.** {{ player.name }} is present but deeply unconscious / sleep-talking — they cannot hear, see, or reply. `player` is INVALID as a target this turn: NEVER address {{ player.name }} or output `player` as the target. NPCs may speak ONLY to one another (`[NPC]>[NPC]`); an NPC may remark ABOUT {{ player.name }} being asleep to another NPC, but must never speak to them. If no NPC has a genuine reason to speak to another NPC, output `0`.

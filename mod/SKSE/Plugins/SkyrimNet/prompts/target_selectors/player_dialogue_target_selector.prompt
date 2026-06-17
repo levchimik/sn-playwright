@@ -5,7 +5,7 @@
 {% set tagInScene = ss.tagInScene %}
 {% set pwExcluded = is_in_faction(player.UUID, "SkyrimNet_ActorBlacklistFaction") %}
 {% if pwExcluded %}
-**DIRECTOR MODE — {{ player.name }} IS ABSENT and is not a participant in this scene.** This input is out-of-scene narration, not {{ player.name }} speaking to anyone present. No NPC is being addressed. Output `0`.
+**DIRECTOR MODE — {{ player.name }} IS NOT PRESENT and takes no part in this scene.** This input is out-of-scene narration, not {{ player.name }} speaking to anyone present. No NPC is being addressed. Output `0`.
 {% endif %}
 {% if (is_in_faction(player.UUID, "PW_AsleepFaction") or is_in_faction(player.UUID, "PW_SleeptalkFaction")) and not pwExcluded %}
 **{{ player.name }} is ASLEEP and not speaking — this input is not {{ player.name }} addressing anyone present. Output `0`.**
