@@ -598,34 +598,31 @@ Function TransformTo(Actor t, String line)
 EndFunction
 
 ; ------------------------------------------------------------------ prompt (no text)
-; Nudge a character to speak without typing anything — the no-text counterpart of
-; Narrate. DirectNarration with EMPTY content registers an ephemeral event that
-; triggers an immediate response from the originator. Crosshair NPC = prompt THAT
-; character to speak; otherwise a random nearby NPC is prompted. We pass NO target,
-; which per the API makes the speaker address "everyone nearby" as a general remark:
-; the player stays in the audience (not removed from the scene) but is NOT singled
-; out / force-addressed. In Director Mode the player is blacklisted, so they're
-; simply not part of that nearby audience — the same call works for both modes.
+; Nudge the scene forward without typing anything. We now defer to SkyrimNet's OWN
+; nudge instead of hand-picking a speaker:
+;   * TriggerContinueNarration() is exactly what SkyrimNet's "continue narration"
+;     hotkey (F8) fires — it registers an ephemeral continue-narration event and lets
+;     SkyrimNet's speaker selector choose who talks. That selector now respects
+;     Director Mode / the blacklist faction properly, so the player is correctly
+;     excluded while in Director Mode without us having to filter the speaker.
+;   * If the PLAYER is the chosen target, we instead fire TriggerPlayerDialogue() —
+;     SkyrimNet's autonomous player-dialogue ("auto-roleplay") path, the player
+;     counterpart of nudging an NPC.
 Function PromptSpeak()
     PromptActor(Game.GetCurrentCrosshairRef() as Actor)
 EndFunction
 
-; Core. preferred = the NPC to nudge (crosshair, or the panel's selected target);
-; None falls back to a random nearby NPC. Reused by the panel.
+; Core. preferred = the nudge target (crosshair, or the panel's selected target).
+; Player target -> player auto-roleplay; anything else -> SkyrimNet's continue-narration
+; nudge (its selector picks the NPC). Reused by the panel.
 Function PromptActor(Actor preferred)
-    Actor pl = Game.GetPlayer()
-    Actor speaker = preferred
-    Int tries = 0
-    While (!speaker || speaker == pl) && tries < 6
-        speaker = Game.FindRandomActorFromRef(pl, 1500.0)
-        tries += 1
-    EndWhile
-    If !speaker || speaker == pl
-        Debug.Notification("No NPC nearby to prompt")
+    If preferred == Game.GetPlayer()
+        SkyrimNetApi.TriggerPlayerDialogue()
+        Debug.Notification("Nudging you to speak (auto-roleplay)")
         Return
     EndIf
-    SkyrimNetApi.DirectNarration("", speaker, None)
-    Debug.Notification("Prompted " + speaker.GetDisplayName() + " to speak")
+    SkyrimNetApi.TriggerContinueNarration()
+    Debug.Notification("Continuing the scene...")
 EndFunction
 
 ; ------------------------------------------------------------------ wheel

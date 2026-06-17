@@ -1,7 +1,10 @@
 #include "PrismaUI_API.h"
 
+#include <winhttp.h>
+
 #include <algorithm>
 #include <string>
+#include <thread>
 #include <vector>
 
 // =============================================================================
@@ -33,6 +36,10 @@ namespace
     uint64_t g_reapplyTick = 0;     // when we last ran an Unfocus->Focus cycle (loop guard)
 
     bool EffectivePause() { return g_pauseGame || g_typing; }
+
+    // SkyrimNet local REST API (read from its WebServer.yaml; respects the user's port).
+    std::string g_apiHost = "127.0.0.1";
+    int         g_apiPort = 8080;
 
     constexpr const char* EVT_COMMAND = "PW_PrismaCommand";  // DLL -> Papyrus (action payload)
     constexpr float       MAX_UNITS = 4096.0f;               // ~58 m search radius
@@ -111,6 +118,127 @@ namespace
                 g_prisma->InteropCall(g_view, "pwSetDirector", a_on ? "1" : "0");
             }
         });
+    }
+
+    // ---- SkyrimNet REST API (editable conversation log) ----
+    // Read host/port from SkyrimNet's WebServer.yaml so we honour the user's
+    // configured port instead of assuming 8080. Tiny line parser -- no YAML dep.
+    void ReadWebServerConfig()
+    {
+        std::ifstream f("Data\\SKSE\\Plugins\\SkyrimNet\\config\\WebServer.yaml");
+        if (!f) {
+            return;
+        }
+        std::string line;
+        while (std::getline(f, line)) {
+            const auto colon = line.find(':');
+            if (colon == std::string::npos) {
+                continue;
+            }
+            auto trim = [](std::string s) {
+                const auto b = s.find_first_not_of(" \t\r\n");
+                const auto e = s.find_last_not_of(" \t\r\n");
+                return (b == std::string::npos) ? std::string{} : s.substr(b, e - b + 1);
+            };
+            const std::string key = trim(line.substr(0, colon));
+            const std::string val = trim(line.substr(colon + 1));
+            if (key == "host" && !val.empty()) {
+                g_apiHost = val;
+            } else if (key == "port" && !val.empty()) {
+                try {
+                    g_apiPort = std::stoi(val);
+                } catch (...) {
+                }
+            }
+        }
+        logger::info("SkyrimNet API base: http://{}:{}", g_apiHost, g_apiPort);
+    }
+
+    // Blocking WinHTTP request (call off the main thread). Returns the response
+    // body, or "" on failure.
+    std::string HttpRequest(const wchar_t* a_verb, const std::string& a_path, const std::string& a_body)
+    {
+        std::string result;
+        const std::wstring whost(g_apiHost.begin(), g_apiHost.end());
+        const std::wstring wpath(a_path.begin(), a_path.end());  // ASCII paths only
+
+        HINTERNET hSession = WinHttpOpen(L"SNPlaywright/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+                                         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!hSession) {
+            return result;
+        }
+        if (HINTERNET hConnect = WinHttpConnect(hSession, whost.c_str(),
+                                                static_cast<INTERNET_PORT>(g_apiPort), 0)) {
+            if (HINTERNET hRequest = WinHttpOpenRequest(hConnect, a_verb, wpath.c_str(), nullptr,
+                                                        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0)) {
+                // SkyrimNet content-negotiates: without Accept: application/json it
+                // serves the HTML dashboard instead of JSON.
+                LPCWSTR headers = L"Accept: application/json\r\nContent-Type: application/json\r\n";
+                const BOOL sent = WinHttpSendRequest(
+                    hRequest, headers, static_cast<DWORD>(-1L),
+                    a_body.empty() ? WINHTTP_NO_REQUEST_DATA : const_cast<char*>(a_body.data()),
+                    static_cast<DWORD>(a_body.size()), static_cast<DWORD>(a_body.size()), 0);
+                if (sent && WinHttpReceiveResponse(hRequest, nullptr)) {
+                    DWORD avail = 0;
+                    do {
+                        avail = 0;
+                        if (!WinHttpQueryDataAvailable(hRequest, &avail) || avail == 0) {
+                            break;
+                        }
+                        std::string chunk(avail, '\0');
+                        DWORD read = 0;
+                        if (WinHttpReadData(hRequest, chunk.data(), avail, &read) && read) {
+                            result.append(chunk.data(), read);
+                        }
+                    } while (avail > 0);
+                }
+                WinHttpCloseHandle(hRequest);
+            }
+            WinHttpCloseHandle(hConnect);
+        }
+        WinHttpCloseHandle(hSession);
+        return result;
+    }
+
+    constexpr const char* LOG_LIST_PATH = "/events?api=list&limit=200&offset=0";
+
+    void PushLog(std::string a_json)
+    {
+        logger::info("log fetch: {} bytes", a_json.size());
+        SKSE::GetTaskInterface()->AddTask([a_json]() {
+            if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
+                g_prisma->InteropCall(g_view, "pwSetLog", a_json.c_str());
+            }
+        });
+    }
+
+    void FetchLogAsync()
+    {
+        std::thread([]() { PushLog(HttpRequest(L"GET", LOG_LIST_PATH, "")); }).detach();
+    }
+
+    void EditEventAsync(std::string a_id, std::string a_type, std::string a_text)
+    {
+        std::thread([a_id, a_type, a_text]() {
+            // SkyrimNet's /events?api=update validates the whole event like a create:
+            // it REQUIRES a non-empty "type" and wants "data" as a plain STRING (an
+            // object is rejected). This collapses the event to string data + drops
+            // formatted_text -- the same shape SkyrimNet's own edit produces. id is
+            // numeric in the store, so send it unquoted.
+            std::string body = "{\"id\":" + a_id +
+                ",\"type\":\"" + JsonEsc(a_type.c_str()) + "\"" +
+                ",\"data\":\"" + JsonEsc(a_text.c_str()) + "\"}";
+            HttpRequest(L"PUT", "/events?api=update", body);
+            PushLog(HttpRequest(L"GET", LOG_LIST_PATH, ""));  // refresh after edit
+        }).detach();
+    }
+
+    void DeleteEventAsync(std::string a_id)
+    {
+        std::thread([a_id]() {
+            HttpRequest(L"DELETE", "/events?api=delete&id=" + a_id, "");
+            PushLog(HttpRequest(L"GET", LOG_LIST_PATH, ""));  // refresh after delete
+        }).detach();
     }
 
     struct NpcEntry
@@ -417,6 +545,33 @@ namespace
         }
     }
 
+    // ---- editable log JS listeners (JS -> DLL; HTTP happens off-thread) ----
+    void OnJsLogFetch(const char*) { FetchLogAsync(); }
+
+    void OnJsLogDelete(const char* a_arg)
+    {
+        if (a_arg && *a_arg) {
+            DeleteEventAsync(a_arg);
+        }
+    }
+
+    void OnJsLogEdit(const char* a_arg)
+    {
+        if (!a_arg) {
+            return;
+        }
+        std::string s = a_arg;  // "id|type|new text" (text may itself contain '|')
+        const auto b1 = s.find('|');
+        if (b1 == std::string::npos) {
+            return;
+        }
+        const auto b2 = s.find('|', b1 + 1);
+        if (b2 == std::string::npos) {
+            return;
+        }
+        EditEventAsync(s.substr(0, b1), s.substr(b1 + 1, b2 - b1 - 1), s.substr(b2 + 1));
+    }
+
     bool ReadPauseGame()
     {
         // [Behavior] PauseGame: 0 = world keeps running while the panel is open
@@ -449,6 +604,7 @@ namespace
         }
 
         LookupFactions();
+        ReadWebServerConfig();
         g_pauseGame = ReadPauseGame();
 
         g_view = g_prisma->CreateView("Playwright/index.html", [](PrismaView a_view) {
@@ -460,6 +616,9 @@ namespace
             g_prisma->RegisterJSListener(a_view, "pwClose", OnJsClose);
             g_prisma->RegisterJSListener(a_view, "pwRefresh", OnJsRefresh);
             g_prisma->RegisterJSListener(a_view, "pwConfig", OnJsConfig);
+            g_prisma->RegisterJSListener(a_view, "pwLogFetch", OnJsLogFetch);
+            g_prisma->RegisterJSListener(a_view, "pwLogEdit", OnJsLogEdit);
+            g_prisma->RegisterJSListener(a_view, "pwLogDelete", OnJsLogDelete);
             // The view stays SHOWN at all times so its corner dot widget is always
             // visible; "closed" just collapses to the dot (unfocused, click-through
             // via pointer-events:none on empty areas). It is never Hidden.

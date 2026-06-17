@@ -50,6 +50,24 @@ the *same* Papyrus cores the wheel/hotkeys use, so behaviour is identical. **Nee
 the Prisma UI framework**; without it the DLL no-ops and the wheel/hotkeys still
 work.
 
+## Conversation log (v0.7)
+
+The panel header has a **Log** toggle that opens a side column showing SkyrimNet's
+live conversation/event history, with inline **Edit** and **Delete** per entry —
+the same editable memory as SkyrimNet's F12 chat, but as a side-panel.
+
+It works by talking to SkyrimNet's **local HTTP API**: `SNPlaywright.dll` reads the
+port from SkyrimNet's `config/WebServer.yaml` (default `127.0.0.1:8080`, honours a
+custom port) and does the requests itself via WinHTTP — `GET /events?api=list` to
+list, `PUT /events?api=update` to edit (the API validates the whole event, so the
+DLL sends `{id, type, data}` with `data` as a plain string), and
+`DELETE /events?api=delete&id=` to delete.
+Doing it in the DLL (not the view's `fetch`) sidesteps browser CORS entirely.
+
+Requires SkyrimNet's web server enabled (`WebServer.yaml` → `enabled: true`, which
+is the default). If it's off/unreachable the log shows a notice and the rest of the
+panel still works.
+
 ## The wheel (UIWheelMenu radial, 8 slots)
 
 ```

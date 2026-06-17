@@ -30,3 +30,5 @@ target("SNPlaywright")
     add_headerfiles("src/**.h")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
+
+    add_syslinks("winhttp")

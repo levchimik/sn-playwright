@@ -50,6 +50,57 @@
     0%,100%{box-shadow:0 0 6px 2px rgba(224,32,32,0.95);}
     50%{box-shadow:0 0 11px 4px rgba(224,32,32,0.45);}
   }
+
+  /* Conversation-log side panel (right of the main panel). Reads/edits SkyrimNet's
+     event store via the DLL's HTTP bridge. Shown only when the panel is open and
+     the Log pill is toggled on. */
+  /* Floating, draggable window (drag by its header). Position persists. */
+  #log{
+    position:fixed;top:48px;left:480px;width:430px;height:70vh;
+    min-width:300px;min-height:220px;max-width:92vw;max-height:92vh;
+    background:rgba(16,16,20,0.60);backdrop-filter:blur(7px);
+    border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    display:none;flex-direction:column;pointer-events:auto;
+    box-shadow:0 12px 40px rgba(0,0,0,0.55);
+  }
+  /* Custom resize grip (bottom-right). Native CSS `resize` loses the drag after a
+     moment in CEF, so we drive it with pointer capture, same as the header drag. */
+  .logresize{position:absolute;right:0;bottom:0;width:22px;height:22px;cursor:nwse-resize;z-index:6;pointer-events:auto;}
+  .logresize::after{content:"";position:absolute;right:3px;bottom:3px;width:10px;height:10px;
+    border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);
+    opacity:0.6;border-bottom-right-radius:3px;}
+  body.open.logopen #log{display:flex;}
+  .loghead{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);cursor:move;}
+  .loghead .title{flex:1;font-size:15px;letter-spacing:2px;color:var(--accent2);font-weight:600;}
+  #logList{flex:1;overflow-y:auto;padding:6px 10px;}
+  #logList::-webkit-scrollbar{width:8px;}
+  #logList::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:4px;}
+  /* Plain block so .lh / .tx / .ed each take the full row width. */
+  .logmsg{padding:8px 10px;margin:4px 0;border-radius:7px;background:var(--bg2);border:1px solid transparent;}
+  .logmsg:hover{border-color:var(--line);}
+  /* Header row: name+time pinned to the LEFT edge, actions to the RIGHT edge. */
+  .logmsg .lh{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px;}
+  .logmsg .meta{display:flex;align-items:baseline;gap:8px;min-width:0;}
+  .logmsg .sp{font-size:12px;font-weight:600;color:var(--fg);}
+  .logmsg.lm-speech .sp{color:#e8d24a;}    /* actor speech  — yellow */
+  .logmsg.lm-thought .sp{color:#b98fe6;}   /* actor thought — purple */
+  .logmsg.lm-narrator .sp{color:#e0892f;}  /* narrator      — orange */
+  .logmsg.lm-system .sp{color:var(--muted);font-style:italic;}
+  .logmsg .tm{font-size:11px;color:var(--muted);}
+  .logmsg .tx{font-size:13px;line-height:1.35;color:var(--fg);user-select:text;white-space:pre-wrap;}
+  .logmsg .la{display:flex;gap:6px;opacity:0;transition:opacity .1s;}
+  .logmsg:hover .la{opacity:1;}
+  .logbtn{font-size:10px;padding:2px 8px;border-radius:5px;border:1px solid var(--line);color:var(--muted);cursor:pointer;background:transparent;}
+  .logbtn:hover{color:var(--accent);border-color:var(--accent);}
+  .logbtn.del:hover{color:var(--danger);border-color:var(--danger);}
+  /* Inline edit (replaces prompt()/confirm(), which CEF suppresses). */
+  .logmsg .ed{margin-top:5px;}
+  .logmsg .edta{display:block;width:100%;min-height:48px;max-height:40vh;overflow:auto;
+    resize:vertical;background:var(--bg2);box-sizing:border-box;
+    border:1px solid var(--accent);border-radius:6px;color:var(--fg);
+    font-size:13px;line-height:1.35;padding:6px 8px;user-select:text;}
+  .logmsg .edta:focus{outline:none;}
+  .logmsg .edrow{display:flex;gap:6px;margin-top:5px;}
   header{
     display:flex;align-items:center;gap:10px;
     padding:14px 16px;border-bottom:1px solid var(--line);
@@ -127,6 +178,7 @@
     <div class="title">PLAYWRIGHT<small>scene control</small></div>
     <div id="dirPill" class="pill" onclick="toggleDirector()">Director: off</div>
     <div id="pausePill" class="pill" onclick="togglePause()">Pause: off</div>
+    <div id="logPill" class="pill" onclick="toggleLog()">Log</div>
     <div class="closebtn" onclick="closePanel()">&#10005;</div>
   </header>
 
@@ -151,25 +203,221 @@
   </footer>
 </div>
 
+<div id="log">
+  <div class="loghead">
+    <div class="title">CONVERSATION LOG</div>
+    <div class="pill" onclick="window.pwLogFetch('')">Refresh</div>
+    <div class="closebtn" onclick="toggleLog()">&#10005;</div>
+  </div>
+  <div id="logList"><div class="empty">Open to load the conversation&hellip;</div></div>
+  <div class="logresize" title="Drag to resize"></div>
+</div>
+
 <div id="dot" title="Playwright"></div>
 
 <script>
   // PrismaUI RegisterJSListener targets are FLAT globals (window.pwCommand, ...).
   // PrismaUI binds them natively once the view is registered; these stubs just
   // guarantee the calls never throw if a click lands before binding completes.
-  window.pwCommand = window.pwCommand || function(){};
-  window.pwClose   = window.pwClose   || function(){};
-  window.pwRefresh = window.pwRefresh || function(){};
-  window.pwConfig  = window.pwConfig  || function(){};
+  window.pwCommand   = window.pwCommand   || function(){};
+  window.pwClose     = window.pwClose     || function(){};
+  window.pwRefresh   = window.pwRefresh   || function(){};
+  window.pwConfig    = window.pwConfig    || function(){};
+  window.pwLogFetch  = window.pwLogFetch  || function(){};
+  window.pwLogEdit   = window.pwLogEdit   || function(){};
+  window.pwLogDelete = window.pwLogDelete || function(){};
 
   // Called by C++ (InteropCall) to expand the full panel or collapse to the dot.
   window.pwSetOpen = function(v){
     var open = (v==="1"||v===1||v===true);
-    document.body.className = open ? "open" : "";
-    // Keep the invisible key-catcher input focused so the page receives keystrokes
-    // (notably Escape) without the text box's auto-pause.
-    if(open){ try{ document.getElementById("kc").focus(); }catch(e){} }
+    document.body.classList.toggle("open", open);
+    // NOTE: we keep the "logopen" class across collapses so the log window stays
+    // open when you reopen the panel; the CSS just hides it while collapsed.
+    if(open){
+      try{ document.getElementById("kc").focus(); }catch(e){}
+      if(document.body.classList.contains("logopen")) window.pwLogFetch("");  // refresh on reopen
+    }
   };
+
+  // ---- conversation log (data pushed by the DLL via InteropCall) ----
+  function logParse(d){ if(!d) return null; if(typeof d==="object") return d; try{return JSON.parse(d);}catch(e){return null;} }
+  function logSpeaker(ev){
+    var d=logParse(ev.data);
+    if(d&&d.speaker) return d.speaker;
+    if(d&&d.name) return d.name;
+    if(d&&d.npc_name) return d.npc_name;
+    var t=(ev.eventType||ev.type||"").toLowerCase();
+    if(t.indexOf("narration")>=0) return "Narrator";
+    if(t.indexOf("persistent")>=0) return "System";
+    return "—";
+  }
+  function logText(ev){
+    var d=logParse(ev.data);
+    if(d){ if(d.dialogue) return d.dialogue; if(d.thoughts) return d.thoughts; if(d.line) return d.line; if(d.narration) return d.narration; if(d.text) return d.text; }
+    if(ev.formatted_text) return ev.formatted_text.replace(/<\/?[^>]+>/g,"");  // strip <internal_thought> etc.
+    if(typeof ev.data==="string") return ev.data;
+    return "";
+  }
+  // Class drives the speaker-name colour. By event type (actor = NPC or player):
+  // speech -> yellow, thought -> purple, narration -> orange, else muted.
+  // NOTE: prefixed "lm-" so they don't collide with the panel's nearby-cast
+  // .npc/.player row styles (that collision was forcing .logmsg into flex layout).
+  function logClass(ev){
+    var t=(ev.type||ev.eventType||"").toLowerCase();
+    if(t.indexOf("thought")>=0) return "lm-thought";                          // npc_thoughts / player_thought
+    if(t.indexOf("narration")>=0) return "lm-narrator";                       // direct_narration
+    if(t.indexOf("dialogue")>=0 || t.indexOf("speech")>=0) return "lm-speech";
+    return "lm-system";
+  }
+  // SkyrimNet gameTimeStr = "1:55 PM, Sundas, 17th of Last Seed, 4E 201".
+  // Show just the clock, as 24h hh:mm.
+  function logTime(ev){
+    var m=(ev.gameTimeStr||"").match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    if(!m) return "";
+    var h=parseInt(m[1],10), mi=m[2], ap=(m[3]||"").toUpperCase();
+    if(ap==="PM" && h<12) h+=12;
+    if(ap==="AM" && h===12) h=0;
+    return (h<10?"0":"")+h+":"+mi;
+  }
+
+  window.pwSetLog = function(json){
+    var list=document.getElementById("logList");
+    var d=logParse(json);
+    var events = d && (d.events || (Array.isArray(d)?d:null));
+    if(!events){ list.innerHTML='<div class="empty">No log data (is SkyrimNet running?).</div>'; return; }
+    if(!events.length){ list.innerHTML='<div class="empty">No events yet.</div>'; return; }
+    events = events.slice().reverse();   // API returns newest-first; show oldest->newest
+    list.innerHTML="";
+    events.forEach(function(ev){ list.appendChild(buildLogRow(ev)); });
+    list.scrollTop=list.scrollHeight;
+  };
+
+  // Build one log row. Header = speaker + time (hh:mm); body = text below. Edit and
+  // Delete are INLINE — CEF suppresses prompt()/confirm(), which is why the old
+  // buttons looked dead.
+  function buildLogRow(ev){
+    var sp=logSpeaker(ev), tx=logText(ev), tm=logTime(ev);
+    var div=document.createElement("div");
+    div.className="logmsg "+logClass(ev);
+    div.innerHTML='<div class="lh"><span class="meta"><span class="sp"></span><span class="tm"></span></span></div><div class="tx"></div>';
+    div.querySelector(".sp").textContent=sp;
+    div.querySelector(".tm").textContent=tm;
+    var txEl=div.querySelector(".tx"); txEl.textContent=tx;
+    if(ev.id==null || ev.id==="") return div;
+
+    // Edit/Delete live in the header row (right-aligned, before name+time), revealed
+    // on hover.
+    var la=document.createElement("div"); la.className="la";
+    var eb=document.createElement("button"); eb.className="logbtn"; eb.textContent="Edit";
+    var db=document.createElement("button"); db.className="logbtn del"; db.textContent="Delete";
+    la.appendChild(eb); la.appendChild(db);
+    div.querySelector(".lh").appendChild(la);   // right edge (after the name+time meta)
+
+    // Inline edit: swap the text for a full-width textarea that grows to fit.
+    eb.onclick=function(){
+      if(div.querySelector(".ed")) return;
+      var ed=document.createElement("div"); ed.className="ed";
+      var ta=document.createElement("textarea"); ta.className="edta"; ta.value=tx;
+      // Same trick as the main text box: keyboard input only routes to the page when
+      // the DLL (re)acquires PrismaUI focus, which the "typing" toggle triggers.
+      // Without this the textarea shows but swallows every keystroke.
+      ta.addEventListener("focus", function(){ window.pwConfig("typing|1"); });
+      ta.addEventListener("blur",  function(){ window.pwConfig("typing|0"); });
+      function fit(){ ta.style.height="auto"; ta.style.height=(ta.scrollHeight+2)+"px"; }
+      ta.addEventListener("input", fit);
+      var row=document.createElement("div"); row.className="edrow";
+      var save=document.createElement("button"); save.className="logbtn"; save.textContent="Save";
+      var cancel=document.createElement("button"); cancel.className="logbtn"; cancel.textContent="Cancel";
+      row.appendChild(save); row.appendChild(cancel); ed.appendChild(ta); ed.appendChild(row);
+      txEl.style.display="none"; la.style.display="none"; div.appendChild(ed);
+      fit();
+      ta.focus(); try{ ta.setSelectionRange(ta.value.length, ta.value.length); }catch(_){}
+      function close(){ window.pwConfig("typing|0"); ed.remove(); txEl.style.display=""; la.style.display=""; }
+      cancel.onclick=close;
+      save.onclick=function(){
+        var nv=ta.value;
+        // SkyrimNet's update API needs the event type; text persists as plain string.
+        if(nv!==tx){ tx=nv; txEl.textContent=nv; window.pwLogEdit(ev.id+"|"+(ev.type||ev.eventType||"")+"|"+nv); }
+        close();
+      };
+    };
+
+    // Inline delete: first click arms ("Sure?"), second click within 2.5s deletes.
+    db.onclick=function(){
+      if(db.dataset.armed==="1"){
+        window.pwLogDelete(""+ev.id);
+        div.style.opacity="0.4"; div.style.pointerEvents="none";
+        return;
+      }
+      db.dataset.armed="1"; db.textContent="Sure?";
+      setTimeout(function(){ if(db.dataset.armed==="1"){ db.dataset.armed="0"; db.textContent="Delete"; } }, 2500);
+    };
+    return div;
+  }
+
+  function toggleLog(){
+    var on=document.body.classList.toggle("logopen");
+    document.getElementById("logPill").classList.toggle("on", on);
+    try{ localStorage.setItem("pwLogOpen", on?"1":"0"); }catch(e){}
+    if(on) window.pwLogFetch("");
+  }
+
+  // Restore the log window's open state + position, and make it draggable by its
+  // header (works while the panel is focused, like the dot).
+  (function(){
+    var logWin=document.getElementById("log");
+    var logHead=logWin.querySelector(".loghead");
+    // Persist position AND size together (skip while hidden, when sizes read 0).
+    function saveLog(){
+      if(logWin.offsetWidth<1) return;
+      try{ localStorage.setItem("pwLogPos", JSON.stringify({x:logWin.offsetLeft, y:logWin.offsetTop, w:logWin.offsetWidth, h:logWin.offsetHeight})); }catch(_){}
+    }
+    try{
+      var lp=JSON.parse(localStorage.getItem("pwLogPos")||"null");
+      if(lp){
+        logWin.style.left=lp.x+"px"; logWin.style.top=lp.y+"px";
+        if(lp.w) logWin.style.width=lp.w+"px";
+        if(lp.h) logWin.style.height=lp.h+"px";
+      }
+    }catch(e){}
+    try{
+      if(localStorage.getItem("pwLogOpen")==="1"){
+        document.body.classList.add("logopen");
+        document.getElementById("logPill").classList.add("on");
+      }
+    }catch(e){}
+    var dr=false,ox=0,oy=0;
+    logHead.addEventListener("pointerdown",function(e){
+      if(e.target.closest(".pill")||e.target.closest(".closebtn")) return; // let buttons work
+      dr=true; ox=e.clientX-logWin.offsetLeft; oy=e.clientY-logWin.offsetTop;
+      try{ logHead.setPointerCapture(e.pointerId); }catch(_){}
+      e.preventDefault();
+    });
+    logHead.addEventListener("pointermove",function(e){
+      if(!dr) return;
+      logWin.style.left=(e.clientX-ox)+"px"; logWin.style.top=(e.clientY-oy)+"px";
+    });
+    logHead.addEventListener("pointerup",function(){
+      if(!dr) return; dr=false; saveLog();
+    });
+    // Custom resize via the corner grip — pointer capture keeps the drag alive
+    // (native CSS resize drops it in CEF after a fraction of a second).
+    var rz=logWin.querySelector(".logresize");
+    if(rz){
+      var rzing=false, sw=0, sh=0, sx=0, sy=0;
+      rz.addEventListener("pointerdown",function(e){
+        rzing=true; sw=logWin.offsetWidth; sh=logWin.offsetHeight; sx=e.clientX; sy=e.clientY;
+        try{ rz.setPointerCapture(e.pointerId); }catch(_){}
+        e.preventDefault(); e.stopPropagation();
+      });
+      rz.addEventListener("pointermove",function(e){
+        if(!rzing) return;
+        logWin.style.width =Math.max(300, sw+(e.clientX-sx))+"px";
+        logWin.style.height=Math.max(220, sh+(e.clientY-sy))+"px";
+      });
+      rz.addEventListener("pointerup",function(){ if(!rzing) return; rzing=false; saveLog(); });
+    }
+  })();
 
   // Called by C++ whenever Director Mode changes (and on load). The corner dot
   // is the red "recording" light -- shown only while Director Mode is on.
