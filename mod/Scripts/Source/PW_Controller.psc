@@ -550,6 +550,61 @@ Function SayTo(Actor t, String line)
     EndIf
 EndFunction
 
+; Panel Say with the speaker/target pairing. The speaker utters the line; if a distinct
+; target is also selected, it's addressed TO them (RegisterDialogueToListener / a directed
+; DirectNarration). A lone selection acts as the speaker, so this stays back-compatible
+; with the old "select one NPC, Say" flow. xform = LLM-voiced; otherwise literal/verbatim.
+Function SayPaired(Actor speaker, Actor listener, String line, Bool xform)
+    If line == ""
+        Return
+    EndIf
+    Actor pl = Game.GetPlayer()
+    Actor talker = speaker
+    If !talker
+        talker = listener        ; only one selected -> they speak it
+        listener = None
+    EndIf
+    If !talker
+        Return
+    EndIf
+    If listener == talker
+        listener = None          ; don't address yourself
+    EndIf
+
+    If xform
+        ; LLM-voiced delivery.
+        If talker == pl
+            ; Player: the dedicated Transform-Dialogue pipeline (highest fidelity, voiced).
+            SkyrimNetApi.TransformDialogue(line)
+            Debug.Notification("You say it (transformed)")
+        Else
+            ; NPC: SkyrimNet has no NPC TransformDialogue, so we frame the line as a factual
+            ; narration the speaker must voice — "<Speaker> says to <Target>: <line>" — and let
+            ; DirectNarration make THEM deliver it aloud (originator = speaker, addressed to the
+            ; listener when set). The line is quoted so the LLM delivers it, not paraphrases it.
+            String content
+            If listener
+                content = talker.GetDisplayName() + " says to " + listener.GetDisplayName() + ", verbatim: \"" + line + "\""
+            Else
+                content = talker.GetDisplayName() + " says, verbatim: \"" + line + "\""
+            EndIf
+            SkyrimNetApi.DirectNarration(content, talker, listener)
+            Debug.Notification(talker.GetDisplayName() + " says it (transformed)")
+        EndIf
+        Return
+    EndIf
+
+    ; Verbatim: the chosen speaker utters the literal words, addressed to the target if distinct.
+    ; Attributed (subtitle + memory) but not voiced — SkyrimNet only TTS's LLM-generated lines.
+    If listener
+        SkyrimNetApi.RegisterDialogueToListener(talker, listener, line)
+        Debug.Notification(talker.GetDisplayName() + " -> " + listener.GetDisplayName())
+    Else
+        SkyrimNetApi.RegisterDialogue(talker, line)
+        Debug.Notification(talker.GetDisplayName() + " says it")
+    EndIf
+EndFunction
+
 ; ------------------------------------------------------------------ think (literal NPC thought)
 ; Inject a literal, persistent, unvoiced thought into the crosshair NPC, verbatim (no
 ; LLM). The npc_thoughts schema requires both `npc_name` and `thoughts`, so we hand the
@@ -619,31 +674,31 @@ Function TransformTo(Actor t, String line)
 EndFunction
 
 ; ------------------------------------------------------------------ prompt (no text)
-; Nudge the scene forward without typing anything. We now defer to SkyrimNet's OWN
-; nudge instead of hand-picking a speaker:
-;   * TriggerContinueNarration() is exactly what SkyrimNet's "continue narration"
-;     hotkey (F8) fires — it registers an ephemeral continue-narration event and lets
-;     SkyrimNet's speaker selector choose who talks. That selector now respects
-;     Director Mode / the blacklist faction properly, so the player is correctly
-;     excluded while in Director Mode without us having to filter the speaker.
-;   * If the PLAYER is the chosen target, we instead fire TriggerPlayerDialogue() —
-;     SkyrimNet's autonomous player-dialogue ("auto-roleplay") path, the player
-;     counterpart of nudging an NPC.
+; Nudge a character to speak without typing anything:
+;   * A specific NPC -> DirectNarration("", npc): an empty-content (ephemeral) direct
+;     narration forces THAT originator to respond immediately. This is the same call the
+;     sleep-talk murmur loop uses, and it's the documented "trigger immediate response"
+;     path. (TriggerContinueNarration() was unreliable here — it hands off to SkyrimNet's
+;     speaker selector, which frequently picks no one, so the prompted NPC never spoke.)
+;   * The PLAYER -> TriggerPlayerDialogue(): SkyrimNet's autonomous player-dialogue
+;     ("auto-roleplay") path.
+;   * No specific target -> TriggerContinueNarration(): let the selector continue the scene.
 Function PromptSpeak()
     PromptActor(Game.GetCurrentCrosshairRef() as Actor)
 EndFunction
 
-; Core. preferred = the nudge target (crosshair, or the panel's selected target).
-; Player target -> player auto-roleplay; anything else -> SkyrimNet's continue-narration
-; nudge (its selector picks the NPC). Reused by the panel.
+; Core. preferred = the nudge target (crosshair, or the panel's selected speaker/target).
 Function PromptActor(Actor preferred)
     If preferred == Game.GetPlayer()
         SkyrimNetApi.TriggerPlayerDialogue()
         Debug.Notification("Nudging you to speak (auto-roleplay)")
-        Return
+    ElseIf preferred
+        SkyrimNetApi.DirectNarration("", preferred, None)   ; force THIS npc to respond now
+        Debug.Notification("Prompted " + preferred.GetDisplayName() + " to speak")
+    Else
+        SkyrimNetApi.TriggerContinueNarration()             ; no target -> selector continues the scene
+        Debug.Notification("Continuing the scene...")
     EndIf
-    SkyrimNetApi.TriggerContinueNarration()
-    Debug.Notification("Continuing the scene...")
 EndFunction
 
 ; ------------------------------------------------------------------ wheel
@@ -773,17 +828,27 @@ EndFunction
 ;   text: free text (may itself contain '|', so it's everything after field 2).
 ; Actions map onto the same cores the wheel/hotkeys use, so behaviour is identical.
 Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akSender)
-    ; Panel payload: "action|targetId|transform|text" (text is everything after field 3,
-    ; so it may itself contain '|'). transform == "1" routes the text actions through the
-    ; LLM (rephrased / voiced / generated); otherwise the literal/verbatim path is used.
-    ; Quick actions (prompt/sleep/...) send only "action|targetId|", so transform and text
-    ; come back empty — they ignore both.
+    ; Panel payload: "action|targetId|transform|speakerId|text" (text is everything after
+    ; field 4, so it may itself contain '|'). transform == "1" routes the text actions
+    ; through the LLM (rephrased / voiced / generated); otherwise the literal/verbatim path
+    ; is used. Quick actions (prompt/sleep/...) send only "action|targetId|", so transform,
+    ; speaker, and text come back empty — they ignore them.
+    ;
+    ; Speaker vs target: Say uses the speaker->target pairing (speaker says the line TO the
+    ; target). Every other text action ignores the pairing and acts on the "primary" actor
+    ; (the speaker if one is set, otherwise the target).
     String action = PipeField(strArg, 0)
     String targetTok = PipeField(strArg, 1)
     Bool xform = (PipeField(strArg, 2) == "1")
-    String text = PipeRest(strArg, 3)
+    String speakerTok = PipeField(strArg, 3)
+    String text = PipeRest(strArg, 4)
     Actor t = ResolveTarget(targetTok)
+    Actor sp = ResolveTarget(speakerTok)
     Actor pl = Game.GetPlayer()
+    Actor primary = sp
+    If !primary
+        primary = t
+    EndIf
     ; Diagnostic (v0.6): confirms the JS->C++->Papyrus bridge delivered the click.
     Debug.Trace("[Playwright] OnPrismaCommand: " + strArg, 0)
 
@@ -792,29 +857,23 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
     ElseIf action == "whisper"
         SkyrimNetApi.TriggerToggleWhisperMode()   ; global: swaps interaction.maxDistance (normal <-> whisper)
     ElseIf action == "prompt"
-        PromptActor(t)
+        PromptActor(primary)
     ElseIf action == "narrate"
-        NarrateText(text, t)            ; a nearby NPC voices/reacts to the scene event (LLM)
+        NarrateText(text, primary)      ; a nearby NPC voices/reacts to the scene event (LLM)
     ElseIf action == "system"
-        SystemEvent(text, t)            ; neutral system/context note; no LLM reaction
+        SystemEvent(text, primary)      ; neutral system/context note; no LLM reaction
     ElseIf action == "say"
-        If t && t != pl
-            If xform
-                TransformTo(t, text)    ; LLM rephrases in the NPC's voice (voiced)
-            Else
-                SayTo(t, text)          ; literal verbatim line (not voiced)
-            EndIf
-        EndIf
+        SayPaired(sp, t, text, xform)   ; speaker -> target (verbatim or LLM-voiced)
     ElseIf action == "transform"
-        If t && t != pl
-            TransformTo(t, text)
+        If primary && primary != pl
+            TransformTo(primary, text)
         EndIf
     ElseIf action == "think"
-        If t && t != pl
+        If primary && primary != pl
             If xform
-                ThinkLLM(t, text)       ; LLM generates the thought from your gist
+                ThinkLLM(primary, text) ; LLM generates the thought from your gist
             Else
-                ThinkTo(t, text)        ; literal verbatim thought
+                ThinkTo(primary, text)  ; literal verbatim thought
             EndIf
         EndIf
     ElseIf action == "sleep"

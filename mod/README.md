@@ -1,4 +1,4 @@
-# Playwright — v0.6
+# Playwright — v0.7
 
 A scene-control / NPC-puppeteering toolkit for **SkyrimNet**. Direct who's "in" a
 scene, narrate it, and put words (and thoughts, and sleep) into your cast — like a
@@ -67,6 +67,33 @@ Doing it in the DLL (not the view's `fetch`) sidesteps browser CORS entirely.
 Requires SkyrimNet's web server enabled (`WebServer.yaml` → `enabled: true`, which
 is the default). If it's off/unreachable the log shows a notice and the rest of the
 panel still works.
+
+## Keyboard controls (v0.7)
+
+The panel is fully keyboard-drivable — a director's console. While the panel is open
+and you're *not* typing, these keys are captured by `SNPlaywright.dll` and routed to
+the view (so they never leak to other mods' hotkeys, e.g. Modex):
+
+| Key | Action |
+|---|---|
+| **↑ / ↓** | Walk the active column (cast list or conversation log). |
+| **→** | Jump to the newest log entry (clears the cast cursor). |
+| **←** | Select the player (PC) as target (clears log focus). |
+| **Enter** *(on a cast member)* | 1st press = **Speaker** (badge), 2nd = **Target** (badge); re-press clears. **Say** honours this Speaker→Target pairing; other actions ignore it. |
+| **Enter** *(on a log entry)* | Open it for inline edit with all text selected — edits keep their original attribution. |
+| **Enter** *(otherwise)* | Sends the box if an action is armed; else arms **Say**. On a focused action button, presses it. |
+| **Delete** | Deletes the focused log entry (no confirm) and moves up — press repeatedly to chain-delete. In the cast column it clears the Speaker/Target pairing. |
+| **Tab** | Open the action menu (then walkable with ↑/↓). |
+| **1 – 4** | Arm **Say / Think / Transform / System** (no text focus, the digit isn't printed). |
+| **0** | Toggle **Transform** (LLM-phrased/voiced) vs verbatim mode. |
+| **+** *(numpad)* | Pause / unpause the game. |
+| **? / `/`** | Open the controls (help) window. |
+| **any letter** | Start typing into the message box. |
+
+The Speaker/Target pairing and the panel's + controls-window position/size persist
+across sessions (localStorage). The panel and controls window are both draggable, and
+the panel is resizable. The conversation log keeps polling for new entries even while
+the game is paused.
 
 ## The wheel (UIWheelMenu radial, 8 slots)
 

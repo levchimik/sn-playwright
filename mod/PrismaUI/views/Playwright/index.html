@@ -22,6 +22,7 @@
   html,body{margin:0;height:100%;background:transparent;overflow:hidden;color:var(--fg);pointer-events:none;}
   #panel{
     position:fixed;top:0;left:0;height:100%;width:440px;
+    min-width:340px;min-height:280px;max-width:96vw;max-height:100vh;
     background:var(--bg);backdrop-filter:blur(6px);
     border-right:1px solid var(--line);
     display:flex;flex-direction:column;
@@ -29,6 +30,10 @@
     pointer-events:auto;
   }
   #panel:focus{outline:none;}
+  /* Custom resize grip (bottom-right), same pointer-capture approach as the log window. */
+  .panelresize{position:absolute;right:0;bottom:0;width:20px;height:20px;cursor:nwse-resize;z-index:7;pointer-events:auto;}
+  .panelresize::after{content:"";position:absolute;right:3px;bottom:3px;width:9px;height:9px;
+    border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);opacity:0.55;border-bottom-right-radius:3px;}
   /* Invisible key-catcher: CEF only routes keystrokes to the page when an
      editable input is focused, so we keep this focused (not the text box, which
      would auto-pause) to receive Escape. Same trick SkyrimNet uses with its input. */
@@ -78,6 +83,9 @@
   /* Plain block so .lh / .tx / .ed each take the full row width. */
   .logmsg{padding:8px 10px;margin:4px 0;border-radius:7px;background:var(--bg2);border:1px solid transparent;}
   .logmsg:hover{border-color:var(--line);}
+  /* Keyboard-focused log row (arrow-walk / → selects latest). Reveals its actions too. */
+  .logmsg.lfocus{border-color:var(--accent2);background:rgba(127,168,214,0.12);}
+  .logmsg.lfocus .la{opacity:1;}
   /* Header row: name+time pinned to the LEFT edge, actions to the RIGHT edge. */
   .logmsg .lh{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px;}
   .logmsg .meta{display:flex;align-items:baseline;gap:8px;min-width:0;}
@@ -102,18 +110,45 @@
   .logmsg .edta:focus{outline:none;}
   .logmsg .edrow{display:flex;gap:6px;margin-top:5px;}
   header{
-    display:flex;align-items:center;gap:10px;
+    display:flex;align-items:center;flex-wrap:wrap;gap:7px 8px;
     padding:14px 16px;border-bottom:1px solid var(--line);
+    cursor:move;   /* drag handle for the whole panel (interactive children keep pointer) */
   }
   header .title{font-size:18px;letter-spacing:3px;font-weight:600;color:var(--accent);flex:1;}
+  .pillbar{flex-basis:100%;display:flex;align-items:center;gap:8px;}
   header .title small{display:block;font-size:10px;letter-spacing:1px;color:var(--muted);font-weight:400;}
   .pill{
     font-size:11px;padding:3px 9px;border-radius:10px;border:1px solid var(--line);
     color:var(--muted);cursor:pointer;white-space:nowrap;
   }
   .pill.on{color:#1a1a1a;background:var(--accent);border-color:var(--accent);font-weight:600;}
+  /* Small square header buttons (+ pause, ? help) sitting next to the × close. */
+  .hbtn{cursor:pointer;color:var(--muted);font-size:15px;line-height:1;padding:2px 8px;border-radius:6px;border:1px solid var(--line);font-weight:700;}
+  .hbtn:hover{color:var(--accent);border-color:var(--accent);}
+  .hbtn.on{color:#1a1a1a;background:var(--accent);border-color:var(--accent);}
   .closebtn{cursor:pointer;color:var(--muted);font-size:18px;line-height:1;padding:2px 6px;}
   .closebtn:hover{color:var(--fg);}
+
+  /* Controls / help window (toggled by the ? header button). Floats over the panel; static
+     reference, dismissed by ?, its ×, or clicking outside. */
+  #controls{
+    position:fixed;left:14px;top:58px;width:412px;max-height:calc(100% - 96px);
+    background:rgba(14,14,18,0.97);backdrop-filter:blur(8px);
+    border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    display:none;flex-direction:column;pointer-events:auto;z-index:10001;
+    box-shadow:0 14px 44px rgba(0,0,0,0.6);
+  }
+  body.open.helpopen #controls{display:flex;}
+  #controls .chead{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);cursor:move;}
+  #controls .chead .title{flex:1;font-size:14px;letter-spacing:2px;color:var(--accent);font-weight:600;}
+  #controls .cbody{overflow-y:auto;padding:6px 4px 10px;}
+  #controls .cbody::-webkit-scrollbar{width:8px;}
+  #controls .cbody::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:4px;}
+  .kgrp{padding:9px 12px 3px;font-size:10px;letter-spacing:1.5px;color:var(--accent2);text-transform:uppercase;}
+  .krow{display:flex;align-items:baseline;gap:10px;padding:3px 12px;}
+  .krow .k{flex:0 0 104px;display:flex;gap:4px;flex-wrap:wrap;}
+  .kkey{display:inline-block;font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid var(--line);background:var(--bg2);color:var(--fg);white-space:nowrap;}
+  .krow .kd{flex:1;font-size:12px;color:var(--muted);line-height:1.35;}
 
   .dir-banner{
     display:none;
@@ -135,19 +170,37 @@
   #npcs::-webkit-scrollbar{width:8px;}
   #npcs::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:4px;}
   .npc{
-    display:flex;align-items:center;gap:10px;
     padding:9px 12px;margin:3px 0;border-radius:7px;cursor:pointer;
     border:1px solid transparent;
   }
   .npc:hover{background:var(--bg2);}
   .npc.sel{background:var(--sel);border-color:var(--accent);}
+  .npchead{display:flex;align-items:center;gap:10px;}
   .npc .nm{flex:1;font-size:14px;}
   .npc .nm .dist{color:var(--muted);font-size:11px;margin-left:6px;}
   .npc.you .nm{color:var(--accent2);}
+  /* Per-row "⋯" trigger for the target-only action menu. */
+  .npcmenu{font-size:17px;line-height:1;color:var(--muted);cursor:pointer;padding:0 6px;border-radius:5px;}
+  .npcmenu:hover{color:var(--accent);background:var(--bg);}
+  /* Floating context menu (Windows-style) for a character's target-only actions. */
+  .ctxmenu{
+    position:fixed;display:none;flex-direction:column;min-width:150px;
+    background:var(--bg);border:1px solid var(--line);border-radius:8px;
+    box-shadow:0 10px 32px rgba(0,0,0,0.6);padding:4px;z-index:10000;pointer-events:auto;
+  }
+  .ctxmenu.open{display:flex;}
+  .ctxitem{font-size:12px;padding:8px 12px;border-radius:5px;cursor:pointer;color:var(--fg);white-space:nowrap;}
+  .ctxitem:hover{background:var(--bg2);color:var(--accent);}
+  .ctxitem.danger:hover{color:var(--danger);}
+  /* Keyboard-highlighted action-menu item (Tab opens the menu on the first option). */
+  .ctxitem.ksel{background:var(--bg2);color:var(--accent);}
   .badge{font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(255,255,255,0.08);color:var(--muted);}
   .badge.asleep{background:rgba(127,168,214,0.18);color:var(--accent2);}
   .badge.sleeptalk{background:rgba(201,161,74,0.18);color:var(--accent);}
   .badge.xhair{background:rgba(255,255,255,0.14);color:var(--fg);}
+  /* Speaker/target pairing badges (Enter assigns: 1st = speaker, 2nd = target). */
+  .badge.spkr{background:rgba(201,161,74,0.22);color:var(--accent);font-weight:600;}
+  .badge.tgt{background:rgba(127,168,214,0.22);color:var(--accent2);font-weight:600;}
   .empty{color:var(--muted);font-size:13px;text-align:center;padding:24px 12px;font-style:italic;}
 
   footer{border-top:1px solid var(--line);padding:12px 14px;}
@@ -157,7 +210,7 @@
     padding:10px 12px;font-size:14px;line-height:1.4;user-select:text;
   }
   #text:focus{outline:none;border-color:var(--accent);}
-  .target-line{font-size:12px;color:var(--muted);margin:8px 2px 10px;}
+  .target-line{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted);margin:8px 2px 10px;}
   .target-line b{color:var(--fg);}
   .actions{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;}
   .actbtn{
@@ -167,8 +220,9 @@
   .actbtn:hover:not(.disabled){border-color:var(--accent);color:var(--accent);}
   .actbtn.disabled{opacity:0.32;cursor:default;}
   .actbtn small{display:block;font-size:9px;color:var(--muted);margin-top:2px;}
-  .actbtn.wake{grid-column:span 2;}
   .actbtn.danger:hover:not(.disabled){border-color:var(--danger);color:var(--danger);}
+  /* Keyboard-preselected action (1-4): armed so Enter fires it. */
+  .actbtn.presel{border-color:var(--accent);color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);}
 </style>
 </head>
 <body>
@@ -176,31 +230,35 @@
 <div id="panel" tabindex="-1">
   <header>
     <div class="title">PLAYWRIGHT<small>scene control</small></div>
-    <div id="dirPill" class="pill" onclick="toggleDirector()">Director: off</div>
-    <div id="pausePill" class="pill" onclick="togglePause()">Pause: off</div>
-    <div id="logPill" class="pill" onclick="toggleLog()">Log</div>
+    <div id="helpBtn" class="hbtn" onclick="toggleHelp()" title="Keyboard controls">?</div>
     <div class="closebtn" onclick="closePanel()">&#10005;</div>
+    <div class="pillbar">
+      <div id="dirPill" class="pill" onclick="toggleDirector()">Director: off</div>
+      <div id="whisperPill" class="pill" onclick="toggleWhisper()" title="Mirrors SkyrimNet's whisper mode: narrows the interaction range (who hears / is in the scene) from the normal radius to the whisper radius. Reflects SkyrimNet's real state, even if you toggled it with SkyrimNet's own hotkey.">Whisper: off</div>
+      <div id="pausePill" class="pill" onclick="togglePause()">Pause: off</div>
+      <div id="logPill" class="pill" onclick="toggleLog()">Log</div>
+    </div>
   </header>
 
   <div id="dirBanner" class="dir-banner"><span class="dot"></span>Director Mode &mdash; you've left the scene</div>
 
-  <div class="section-label">Nearby cast &mdash; click to target</div>
+  <div class="section-label">Nearby cast &mdash; &crarr; sets speaker, &crarr; again sets target</div>
   <div id="npcs"><div class="empty">Loading nearby people&hellip;</div></div>
 
   <footer>
     <textarea id="text" placeholder="Line / thought / scene event&hellip;"></textarea>
-    <div class="target-line">Target: <b id="targetName">none</b></div>
+    <div class="target-line">
+      <span>Speaker: <b id="speakerName">none</b> &middot; Target: <b id="targetName">none</b></span>
+      <div id="xformPill" class="pill" onclick="toggleTransform()" title="On: the LLM rephrases your text in-character (voiced/generated). Off: used literally / verbatim.">Transform: off</div>
+    </div>
     <div class="actions">
-      <div class="actbtn" data-act="say"       data-need="target,text" onclick="fire(this)">Say<small>verbatim</small></div>
-      <div class="actbtn" data-act="transform" data-need="target,text" onclick="fire(this)">Transform<small>LLM voice</small></div>
-      <div class="actbtn" data-act="think"     data-need="target,text" onclick="fire(this)">Think<small>thought</small></div>
-      <div class="actbtn" data-act="prompt"    data-need="target"      onclick="fire(this)">Prompt<small>nudge</small></div>
-      <div class="actbtn" data-act="narrate"   data-need="text"        onclick="fire(this)">Narrate<small>scene</small></div>
-      <div class="actbtn" data-act="sleeptalk" data-need="target"      onclick="fire(this)">Sleep-talk<small>murmur</small></div>
-      <div class="actbtn" data-act="sleep"     data-need="target"      onclick="fire(this)">Deep Sleep<small>out cold</small></div>
-      <div class="actbtn wake" data-act="wake" data-need="target"      onclick="fire(this)">Wake<small>rouse</small></div>
+      <div class="actbtn" data-act="say"     data-need="target,text" data-suboff="verbatim" data-subon="LLM voice"  onclick="fire(this)">Say<small>verbatim</small></div>
+      <div class="actbtn" data-act="think"   data-need="target,text" data-suboff="literal"  data-subon="LLM"        onclick="fire(this)">Think<small>literal</small></div>
+      <div class="actbtn" data-act="narrate" data-need="text"        onclick="fire(this)">Narrate<small>reaction</small></div>
+      <div class="actbtn" data-act="system"  data-need="text"        onclick="fire(this)">System<small>context</small></div>
     </div>
   </footer>
+  <div class="panelresize" title="Drag to resize"></div>
 </div>
 
 <div id="log">
@@ -213,7 +271,41 @@
   <div class="logresize" title="Drag to resize"></div>
 </div>
 
+<div id="controls">
+  <div class="chead">
+    <div class="title">CONTROLS</div>
+    <div class="closebtn" onclick="toggleHelp()">&#10005;</div>
+  </div>
+  <div class="cbody">
+    <div class="kgrp">Nearby cast</div>
+    <div class="krow"><span class="k"><span class="kkey">&uarr;</span><span class="kkey">&darr;</span></span><span class="kd">Move the cursor through the cast</span></div>
+    <div class="krow"><span class="k"><span class="kkey">&larr;</span></span><span class="kd">Move the cursor to you (the player)</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Enter</span></span><span class="kd">Assign the cursor NPC &mdash; 1st press = <b>speaker</b>, 2nd = <b>target</b> (again clears)</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Tab</span></span><span class="kd">Open the action menu on the cursor NPC</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Del</span></span><span class="kd">Clear the speaker / target pairing</span></div>
+
+    <div class="kgrp">Conversation log</div>
+    <div class="krow"><span class="k"><span class="kkey">&rarr;</span></span><span class="kd">Jump to the log and select the latest message</span></div>
+    <div class="krow"><span class="k"><span class="kkey">&uarr;</span><span class="kkey">&darr;</span></span><span class="kd">Move between messages</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Enter</span></span><span class="kd">Edit the message (text selected &mdash; type to overwrite; Enter saves)</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Del</span></span><span class="kd">Delete the message (press again to chain)</span></div>
+
+    <div class="kgrp">Compose &amp; act</div>
+    <div class="krow"><span class="k"><span class="kkey">1</span><span class="kkey">2</span><span class="kkey">3</span><span class="kkey">4</span></span><span class="kd">Arm Say / Think / Narrate / System, then type</span></div>
+    <div class="krow"><span class="k"><span class="kkey">0</span></span><span class="kd">Toggle Transform mode</span></div>
+    <div class="krow"><span class="k"><span class="kkey">A&hellip;Z</span></span><span class="kd">Start writing in the message box</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Enter</span></span><span class="kd">Send (arms Say if nothing is armed) &middot; <span class="kkey">Shift</span>+<span class="kkey">Enter</span> = new line</span></div>
+
+    <div class="kgrp">General</div>
+    <div class="krow"><span class="k"><span class="kkey">Esc</span></span><span class="kd">Leave the box, then close the panel</span></div>
+    <div class="krow"><span class="k"><span class="kkey">RMB</span></span><span class="kd">Hold to look / reposition without closing</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Num +</span></span><span class="kd">Pause / unpause the game</span></div>
+    <div class="krow"><span class="k"><span class="kkey">?</span> <span class="kkey">/</span></span><span class="kd">Open / close this controls window</span></div>
+  </div>
+</div>
+
 <div id="dot" title="Playwright"></div>
+<div id="ctxMenu" class="ctxmenu"></div>
 
 <script>
   // PrismaUI RegisterJSListener targets are FLAT globals (window.pwCommand, ...).
@@ -236,6 +328,14 @@
     if(open){
       try{ document.getElementById("kc").focus(); }catch(e){}
       if(document.body.classList.contains("logopen")) window.pwLogFetch("");  // refresh on reopen
+    } else {
+      // Closing: wipe the compose box. The Shift+key close combo reaches CEF too (keys aren't
+      // captured), so its printable character leaks into the box via the type-to-compose path;
+      // clearing on close keeps it from lingering. Also disarm any preselected action.
+      try{
+        var tb=document.getElementById("text"); if(tb) tb.value="";
+        nav.act=null; clearActHighlight(); refreshButtons();
+      }catch(e){}
     }
   };
 
@@ -257,6 +357,24 @@
     if(ev.formatted_text) return ev.formatted_text.replace(/<\/?[^>]+>/g,"");  // strip <internal_thought> etc.
     if(typeof ev.data==="string") return ev.data;
     return "";
+  }
+  // Rebuild an event's data string for an edit so its attribution survives. The speaker
+  // lives INSIDE ev.data (logSpeaker reads d.speaker/.name/.npc_name) and SkyrimNet's
+  // update overwrites data with whatever we send — so resend the ORIGINAL object with
+  // only the text field changed, rather than collapsing it to bare text (which dropped
+  // the speaker -> "nobody"). Falls back to bare text for unstructured data.
+  function buildEditData(ev, newText){
+    var d=logParse(ev.data);
+    if(d && typeof d==="object"){
+      if("dialogue" in d) d.dialogue=newText;
+      else if("thoughts" in d) d.thoughts=newText;
+      else if("line" in d) d.line=newText;
+      else if("narration" in d) d.narration=newText;
+      else if("text" in d) d.text=newText;
+      else d.text=newText;
+      return JSON.stringify(d);
+    }
+    return newText;
   }
   // Class drives the speaker-name colour. By event type (actor = NPC or player):
   // speech -> yellow, thought -> purple, narration -> orange, else muted.
@@ -280,16 +398,56 @@
     return (h<10?"0":"")+h+":"+mi;
   }
 
+  // A "stub" narration is Playwright scaffolding, not a real scene beat:
+  //   * empty text   -> a Prompt DirectNarration("", npc) / sleep-talk murmur trigger
+  //   * '... verbatim: "..."' -> the say-transform stage direction we feed an NPC speaker
+  // Once the scene has moved past it (the NPC has spoken), it's just noise to clean out.
+  function isStubNarration(ev){
+    var t=(ev.type||ev.eventType||"").toLowerCase();
+    if(t.indexOf("narration")<0) return false;
+    var tx=logText(ev).trim();
+    if(tx==="") return true;                        // empty Prompt / murmur trigger
+    if(tx.indexOf('verbatim: "')>=0) return true;   // say-transform stage direction
+    return false;
+  }
+  var _pwDeletedNarr = {};   // ids we've already auto-deleted, so we don't re-attempt every fetch
+  var _logSig = null;        // last rendered event set (id + text length) — skips no-op rebuilds while polling
+
   window.pwSetLog = function(json){
     var list=document.getElementById("logList");
     var d=logParse(json);
     var events = d && (d.events || (Array.isArray(d)?d:null));
-    if(!events){ list.innerHTML='<div class="empty">No log data (is SkyrimNet running?).</div>'; return; }
-    if(!events.length){ list.innerHTML='<div class="empty">No events yet.</div>'; return; }
+    if(!events){ list.innerHTML='<div class="empty">No log data (is SkyrimNet running?).</div>'; _logSig=null; return; }
+    if(!events.length){ list.innerHTML='<div class="empty">No events yet.</div>'; _logSig=null; return; }
     events = events.slice().reverse();   // API returns newest-first; show oldest->newest
+    // Skip the rebuild when nothing changed (the live poll fires every couple seconds) so we
+    // don't churn the DOM, yank scroll, or fight an open editor. id + text-length catches new,
+    // deleted, and edited messages.
+    var sig = events.map(function(e){ return (e.id!=null?e.id:"") + ":" + logText(e).length; }).join(",");
+    if(sig === _logSig && !nav._focusLatestOnLoad) return;
+    _logSig = sig;
+    var nearBottom = (list.scrollHeight - list.scrollTop - list.clientHeight) < 60;  // preserve scroll if reading history
     list.innerHTML="";
-    events.forEach(function(ev){ list.appendChild(buildLogRow(ev)); });
-    list.scrollTop=list.scrollHeight;
+    events.forEach(function(ev, i){
+      // Drop Playwright's scaffolding narration (empty Prompt/murmur stub, or the say-transform
+      // stage direction) once the prompted NPC has spoken (i.e. it's no longer the newest event),
+      // and delete it from SkyrimNet's history. Never the newest event, so we don't yank the
+      // trigger before the NPC has started responding.
+      if(isStubNarration(ev) && i < events.length-1 && ev.id!=null && ev.id!==""){
+        if(!_pwDeletedNarr[ev.id]){ _pwDeletedNarr[ev.id]=1; window.pwLogDelete(""+ev.id); }
+        return;   // skip rendering it regardless
+      }
+      list.appendChild(buildLogRow(ev));
+    });
+    if(nearBottom) list.scrollTop=list.scrollHeight;   // only auto-follow if you were at the bottom
+    // Re-apply the keyboard cursor after a rebuild (manual Refresh / reopen), and
+    // honour a pending "→ select latest" that opened the log a moment ago.
+    if(nav._focusLatestOnLoad){
+      nav._focusLatestOnLoad=false; nav.col="log";
+      var lr=logRows(); if(lr.length) focusLog(lr.length-1);
+    } else if(nav.col==="log"){
+      var lr2=logRows(); if(lr2.length) focusLog(clamp(nav.log,0,lr2.length-1));
+    }
   };
 
   // Build one log row. Header = speaker + time (hh:mm); body = text below. Edit and
@@ -314,7 +472,9 @@
     div.querySelector(".lh").appendChild(la);   // right edge (after the name+time meta)
 
     // Inline edit: swap the text for a full-width textarea that grows to fit.
-    eb.onclick=function(){
+    // selectAll (keyboard Enter) highlights the whole text so the first keystroke
+    // overwrites it; mouse Edit just drops the caret at the end.
+    function openEdit(selectAll){
       if(div.querySelector(".ed")) return;
       var ed=document.createElement("div"); ed.className="ed";
       var ta=document.createElement("textarea"); ta.className="edta"; ta.value=tx;
@@ -331,24 +491,39 @@
       row.appendChild(save); row.appendChild(cancel); ed.appendChild(ta); ed.appendChild(row);
       txEl.style.display="none"; la.style.display="none"; div.appendChild(ed);
       fit();
-      ta.focus(); try{ ta.setSelectionRange(ta.value.length, ta.value.length); }catch(_){}
-      function close(){ window.pwConfig("typing|0"); ed.remove(); txEl.style.display=""; la.style.display=""; }
-      cancel.onclick=close;
-      save.onclick=function(){
+      ta.focus();
+      try{ if(selectAll) ta.select(); else ta.setSelectionRange(ta.value.length, ta.value.length); }catch(_){}
+      function close(){ window.pwConfig("typing|0"); ed.remove(); txEl.style.display=""; la.style.display=""; focusKc(); }
+      function commit(){
         var nv=ta.value;
-        // SkyrimNet's update API needs the event type; text persists as plain string.
-        if(nv!==tx){ tx=nv; txEl.textContent=nv; window.pwLogEdit(ev.id+"|"+(ev.type||ev.eventType||"")+"|"+nv); }
+        // Resend the whole data object (speaker preserved), not just the new text.
+        if(nv!==tx){ tx=nv; txEl.textContent=nv; window.pwLogEdit(ev.id+"|"+(ev.type||ev.eventType||"")+"|"+buildEditData(ev, nv)); }
         close();
-      };
-    };
-
-    // Inline delete: first click arms ("Sure?"), second click within 2.5s deletes.
-    db.onclick=function(){
-      if(db.dataset.armed==="1"){
-        window.pwLogDelete(""+ev.id);
-        div.style.opacity="0.4"; div.style.pointerEvents="none";
-        return;
       }
+      cancel.onclick=close;
+      save.onclick=commit;
+      // Keyboard while editing: Enter saves, Shift+Enter inserts a newline, Escape cancels.
+      ta.addEventListener("keydown", function(e){
+        if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); e.stopPropagation(); commit(); }
+        else if(e.key==="Escape"){ e.preventDefault(); e.stopPropagation(); close(); }
+      });
+    }
+    eb.onclick=function(){ openEdit(false); };
+    div._pwEdit=openEdit;   // keyboard Enter on a focused log row
+
+    // Delete the event with no confirmation (used by keyboard Delete and the armed
+    // mouse button below). Marks the row so the keyboard walker skips it.
+    function doDelete(){
+      window.pwLogDelete(""+ev.id);
+      div.dataset.deleted="1";
+      div.style.opacity="0.4"; div.style.pointerEvents="none";
+      focusKc();
+    }
+    div._pwDelete=doDelete;   // keyboard Delete on a focused log row
+
+    // Inline delete (mouse): first click arms ("Sure?"), second click within 2.5s deletes.
+    db.onclick=function(){
+      if(db.dataset.armed==="1"){ doDelete(); return; }
       db.dataset.armed="1"; db.textContent="Sure?";
       setTimeout(function(){ if(db.dataset.armed==="1"){ db.dataset.armed="0"; db.textContent="Delete"; } }, 2500);
     };
@@ -361,6 +536,33 @@
     try{ localStorage.setItem("pwLogOpen", on?"1":"0"); }catch(e){}
     if(on) window.pwLogFetch("");
   }
+
+  // Controls/help window: toggled by the ? header button; static reference.
+  function toggleHelp(){
+    var on=document.body.classList.toggle("helpopen");
+    document.getElementById("helpBtn").classList.toggle("on", on);
+  }
+  // Dismiss the help window on any click outside it (but not on the header buttons).
+  document.addEventListener("pointerdown", function(e){
+    if(!document.body.classList.contains("helpopen")) return;
+    var c=document.getElementById("controls");
+    if(c && !c.contains(e.target) && !(e.target.closest && e.target.closest(".hbtn"))){
+      document.body.classList.remove("helpopen");
+      document.getElementById("helpBtn").classList.remove("on");
+    }
+  });
+
+  // Live log: while the log window is open, poll for new messages so directed lines (and any
+  // autonomous chatter) appear without a manual Refresh. This runs even while the game is paused
+  // — the CEF timer is independent of the game loop and the DLL's log push isn't pause-gated, so
+  // it covers exactly the "directing while paused" case. pwSetLog's signature check makes the
+  // no-change polls cheap (no DOM rebuild); we skip entirely while an inline editor is open.
+  setInterval(function(){
+    if(!document.body.classList.contains("open")) return;       // panel collapsed -> log hidden
+    if(!document.body.classList.contains("logopen")) return;    // log window not shown
+    if(document.querySelector("#logList .ed")) return;          // mid-edit -> don't refetch under the editor
+    window.pwLogFetch("");
+  }, 2500);
 
   // Restore the log window's open state + position, and make it draggable by its
   // header (works while the panel is focused, like the dot).
@@ -419,25 +621,140 @@
     }
   })();
 
+  // ---- Main panel: drag by the header, resize from the corner grip. Position+size persist.
+  // Kept fully within the viewport so the resize grip stays reachable. The header's
+  // interactive children (pills, +/?, ×) are excluded from the drag. ----
+  (function(){
+    var panel=document.getElementById("panel");
+    var head=panel.querySelector("header");
+    var grip=panel.querySelector(".panelresize");
+    function savePanel(){
+      if(panel.offsetWidth<1) return;
+      try{ localStorage.setItem("pwPanelPos", JSON.stringify({x:panel.offsetLeft,y:panel.offsetTop,w:panel.offsetWidth,h:panel.offsetHeight})); }catch(_){}
+    }
+    // Switch from the CSS dock (top/left:0, height:100%) to explicit px so drag/resize stick.
+    function explicit(){
+      var r=panel.getBoundingClientRect();
+      panel.style.left=r.left+"px"; panel.style.top=r.top+"px";
+      panel.style.width=r.width+"px"; panel.style.height=r.height+"px";
+    }
+    try{
+      var p=JSON.parse(localStorage.getItem("pwPanelPos")||"null");
+      if(p){ panel.style.left=p.x+"px"; panel.style.top=p.y+"px"; if(p.w) panel.style.width=p.w+"px"; if(p.h) panel.style.height=p.h+"px"; }
+    }catch(_){}
+    var dr=false,ox=0,oy=0;
+    head.addEventListener("pointerdown",function(e){
+      if(e.target.closest(".pill")||e.target.closest(".hbtn")||e.target.closest(".closebtn")) return;
+      explicit();
+      dr=true; ox=e.clientX-panel.offsetLeft; oy=e.clientY-panel.offsetTop;
+      try{ head.setPointerCapture(e.pointerId); }catch(_){}
+      e.preventDefault();
+    });
+    head.addEventListener("pointermove",function(e){
+      if(!dr) return;
+      var x=Math.max(0, Math.min(e.clientX-ox, window.innerWidth - panel.offsetWidth));
+      var y=Math.max(0, Math.min(e.clientY-oy, window.innerHeight - panel.offsetHeight));
+      panel.style.left=x+"px"; panel.style.top=y+"px";
+    });
+    head.addEventListener("pointerup",function(){ if(!dr) return; dr=false; savePanel(); });
+    if(grip){
+      var rz=false,sw=0,sh=0,sx=0,sy=0;
+      grip.addEventListener("pointerdown",function(e){
+        explicit();
+        rz=true; sw=panel.offsetWidth; sh=panel.offsetHeight; sx=e.clientX; sy=e.clientY;
+        try{ grip.setPointerCapture(e.pointerId); }catch(_){}
+        e.preventDefault(); e.stopPropagation();
+      });
+      grip.addEventListener("pointermove",function(e){
+        if(!rz) return;
+        panel.style.width =Math.max(340, sw+(e.clientX-sx))+"px";
+        panel.style.height=Math.max(280, sh+(e.clientY-sy))+"px";
+      });
+      grip.addEventListener("pointerup",function(){ if(!rz) return; rz=false; savePanel(); });
+    }
+  })();
+
+  // ---- Controls window: drag by its header. Position persists. ----
+  (function(){
+    var win=document.getElementById("controls");
+    var head=win.querySelector(".chead");
+    function save(){ if(win.offsetWidth<1) return; try{ localStorage.setItem("pwCtrlPos", JSON.stringify({x:win.offsetLeft,y:win.offsetTop})); }catch(_){} }
+    try{ var p=JSON.parse(localStorage.getItem("pwCtrlPos")||"null"); if(p){ win.style.left=p.x+"px"; win.style.top=p.y+"px"; } }catch(_){}
+    var dr=false,ox=0,oy=0;
+    head.addEventListener("pointerdown",function(e){
+      if(e.target.closest(".closebtn")) return;
+      dr=true; ox=e.clientX-win.offsetLeft; oy=e.clientY-win.offsetTop;
+      try{ head.setPointerCapture(e.pointerId); }catch(_){}
+      e.preventDefault();
+    });
+    head.addEventListener("pointermove",function(e){
+      if(!dr) return;
+      win.style.left=Math.max(0, Math.min(e.clientX-ox, window.innerWidth - win.offsetWidth))+"px";
+      win.style.top =Math.max(0, Math.min(e.clientY-oy, window.innerHeight - 40))+"px";
+    });
+    head.addEventListener("pointerup",function(){ if(!dr) return; dr=false; save(); });
+  })();
+
   // Called by C++ whenever Director Mode changes (and on load). The corner dot
   // is the red "recording" light -- shown only while Director Mode is on.
   window.pwSetDirector = function(v){
     document.getElementById("dot").classList.toggle("on", (v==="1"||v===1||v===true));
   };
 
-  var state = { npcs:[], target:null, targetName:"none", director:false, pause:false };
+  var state = { npcs:[], speaker:null, speakerName:"none", target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false };
+  try{ state.transform = localStorage.getItem("pwTransform")==="1"; }catch(e){}
+  // Restore the speaker/target pairing across panel close/reopen (persisted in localStorage).
+  try{ var _p=JSON.parse(localStorage.getItem("pwPair")||"null");
+    if(_p){ state.speaker=_p.s||null; state.speakerName=_p.sn||"none"; state.target=_p.t||null; state.targetName=_p.tn||"none"; } }catch(e){}
+
+  // Keyboard navigation state. col = which column the arrows walk ("npc" | "log"); npc =
+  // the cast CURSOR row index (separate from speaker/target — Enter on the cursor assigns
+  // those); log = index into the (non-deleted) log rows; menu = index into an open action
+  // menu, or -1; act = a preselected action button. Helpers live near the bottom.
+  var nav = { col:null, npc:-1, log:-1, menu:-1, act:null, _focusLatestOnLoad:false };
+
+  // Transform mode: when on, the text actions (Say/Think/Narrate) route through the
+  // LLM (rephrased / generated / voiced); when off they're literal/verbatim. The flag
+  // rides along in each command payload; Papyrus picks the path.
+  function toggleTransform(){
+    state.transform = !state.transform;
+    try{ localStorage.setItem("pwTransform", state.transform?"1":"0"); }catch(e){}
+    updateXform();
+  }
+  function updateXform(){
+    var pill = document.getElementById("xformPill");
+    pill.textContent = "Transform: " + (state.transform ? "on" : "off");
+    pill.className = "pill" + (state.transform ? " on" : "");
+    document.querySelectorAll(".actions .actbtn").forEach(function(b){
+      if(!b.hasAttribute("data-subon")) return;   // not transform-aware (e.g. System)
+      var s = b.querySelector("small"); if(!s) return;
+      s.textContent = state.transform ? (b.getAttribute("data-subon")||"") : (b.getAttribute("data-suboff")||"");
+    });
+  }
 
   // ---- C++ -> JS : push nearby-NPC data (called via InteropCall) ----
   window.pwSetData = function(json){
     try{
       var d = (typeof json === "string") ? JSON.parse(json) : json;
-      state.npcs = d.npcs || [];
+      var npcs = d.npcs || [];
+      // Render-worthy signature: header flags + the SET of actors and their states — NOT distance,
+      // which jitters every poll. Lets the 1 Hz poll skip the DOM rebuild when nothing meaningful
+      // changed, so an open ⋯ menu / selection survives while you reposition.
+      var sig = (d.directorMode?1:0)+"|"+(d.pauseGame?1:0)+"|"+(d.whisper?1:0)+"|"+
+                npcs.map(function(n){return n.id+":"+n.state+":"+n.dist+(n.player?"P":"");}).join(",");
+      state.npcs = npcs;
       state.director = !!d.directorMode;
       state.pause = !!d.pauseGame;
-      // keep selection if the target is still present
-      if(state.target && !state.npcs.some(function(n){return n.id===state.target;})){
-        state.target = null; state.targetName = "none";
-      }
+      state.whisper = !!d.whisper;
+      state.radius = d.radius;   // meters; for the pill tooltip / label
+      // Speaker/target are sticky (persist even if the actor steps out of range), so we do
+      // NOT drop them here. Keep the cursor index in range though.
+      if(nav.npc >= npcs.length) nav.npc = npcs.length - 1;
+      if(sig === state._sig) return;   // nothing changed (incl. distance) -> skip
+      // don't yank an open ⋯ menu out from under the user mid-interaction; refresh once it closes
+      var cm = document.getElementById("ctxMenu");
+      if(cm && cm.classList.contains("open")) return;
+      state._sig = sig;
       render();
     }catch(e){ console.error("pwSetData parse error", e, json); }
   };
@@ -456,40 +773,119 @@
     pp.textContent = "Pause: " + (state.pause ? "on" : "off");
     pp.className = "pill" + (state.pause ? " on" : "");
 
+    var wp = document.getElementById("whisperPill");
+    wp.textContent = "Whisper: " + (state.whisper ? "on" : "off");
+    wp.className = "pill" + (state.whisper ? " on" : "");
+    if(state.radius != null) wp.title = "Mirrors SkyrimNet's whisper mode. Interaction range now ~" + state.radius + " m (who hears / is in the scene). Toggle to switch normal ↔ whisper; reflects SkyrimNet's real state even if toggled via its own hotkey.";
+
+    closeCtxMenu();   // any open action menu is stale once the list re-renders
     var box = document.getElementById("npcs");
     box.innerHTML = "";
     if(!state.npcs.length){
       box.innerHTML = '<div class="empty">No SkyrimNet people nearby.</div>';
     } else {
-      state.npcs.forEach(function(n){
+      state.npcs.forEach(function(n, idx){
+        var isCursor = (idx===nav.npc);          // .sel doubles as the keyboard cursor
         var row = document.createElement("div");
-        row.className = "npc" + (n.player ? " you":"") + (state.target===n.id ? " sel":"");
+        row.className = "npc" + (n.player ? " you":"") + (isCursor ? " sel":"");
         var badge = "";
         if(n.state==="asleep")    badge = '<span class="badge asleep">asleep</span>';
         else if(n.state==="sleeptalk") badge = '<span class="badge sleeptalk">murmuring</span>';
         if(n.crosshair) badge += ' <span class="badge xhair">crosshair</span>';
+        if(state.speaker===n.id) badge += ' <span class="badge spkr">speaker</span>';
+        if(state.target===n.id)  badge += ' <span class="badge tgt">target</span>';
         var dist = (n.dist!=null && !n.player) ? '<span class="dist">'+n.dist+'m</span>' : '';
-        row.innerHTML = '<span class="nm">'+esc(n.name)+dist+'</span>'+badge;
-        row.onclick = function(){ selectTarget(n); };
+        var head = document.createElement("div");
+        head.className = "npchead";
+        head.innerHTML = '<span class="nm">'+esc(n.name)+dist+'</span>'+badge;
+        head.onclick = function(){ selectByClick(idx); };   // click cycles speaker -> target
+        // "⋯" opens the per-character action menu (independent of the pairing;
+        // stopPropagation so it doesn't also re-assign speaker/target).
+        var menuBtn = document.createElement("div");
+        menuBtn.className = "npcmenu"; menuBtn.textContent = "⋯"; menuBtn.title = "Actions";
+        menuBtn.onclick = function(e){ e.stopPropagation(); openCtxMenu(n, menuBtn); };
+        head.appendChild(menuBtn);
+        row.appendChild(head);
         box.appendChild(row);
       });
     }
     refreshButtons();
+    document.getElementById("speakerName").textContent = state.speakerName;
     document.getElementById("targetName").textContent = state.targetName;
   }
 
-  function selectTarget(n){
-    state.target = n.id; state.targetName = n.name;
+  // ---- per-character target-only action menu (Prompt + state-aware sleep) ----
+  function openCtxMenu(n, anchorEl){
+    var m = document.getElementById("ctxMenu");
+    m.innerHTML = "";
+    function item(label, act, cls){
+      var d = document.createElement("div");
+      d.className = "ctxitem" + (cls ? " "+cls : "");
+      d.textContent = label;
+      d.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); quickFire(act, n); };
+      m.appendChild(d);
+    }
+    item(n.player ? "Prompt (you)" : "Prompt", "prompt");
+    if(n.state==="asleep" || n.state==="sleeptalk"){
+      item("Wake", "wake");
+    } else {
+      item("Deep Sleep", "sleep", "danger");
+      item("Sleep-talk", "sleeptalk");
+    }
+    // Anchor below the ⋯, clamped to the viewport.
+    var r = anchorEl.getBoundingClientRect();
+    m.classList.add("open");                       // show first so we can measure
+    var w = m.offsetWidth || 160, h = m.offsetHeight || 120;
+    var left = Math.min(r.left, window.innerWidth - w - 6);
+    var top  = (r.bottom + 4 + h <= window.innerHeight) ? r.bottom + 4 : r.top - h - 4;
+    m.style.left = Math.max(6, left) + "px";
+    m.style.top  = Math.max(6, top) + "px";
+  }
+  function closeCtxMenu(){ document.getElementById("ctxMenu").classList.remove("open"); nav.menu=-1; }
+  // Dismiss the menu on any outside click.
+  document.addEventListener("pointerdown", function(e){
+    var m = document.getElementById("ctxMenu");
+    if(m.classList.contains("open") && !m.contains(e.target) && !(e.target.closest && e.target.closest(".npcmenu"))) closeCtxMenu();
+  });
+
+  function quickFire(act, n){
+    send(act + "|" + n.id + "|");
+    // sleep/wake change badges -- re-pull after Papyrus runs
+    if(["sleep","sleeptalk","wake"].indexOf(act)>=0) scheduleRefresh();
+  }
+
+  // Speaker/target pairing. Enter (keyboard) and a row click both run this on the
+  // chosen NPC: 1st pick = speaker, 2nd = target; picking one already in a slot clears
+  // it; with both set, a new pick replaces the target. Say uses speaker -> target; other
+  // actions just use whichever is the "primary" (speaker, else target). Persisted.
+  function toggleActorSelection(n){
+    if(!n) return;
+    if(state.speaker===n.id){ state.speaker=null; state.speakerName="none"; }
+    else if(state.target===n.id){ state.target=null; state.targetName="none"; }
+    else if(!state.speaker){ state.speaker=n.id; state.speakerName=n.name; }
+    else { state.target=n.id; state.targetName=n.name; }
+    savePairing();
     render();
   }
+  function clearPairing(){
+    state.speaker=null; state.speakerName="none";
+    state.target=null;  state.targetName="none";
+    savePairing();
+    render();
+  }
+  function savePairing(){
+    try{ localStorage.setItem("pwPair", JSON.stringify({s:state.speaker,sn:state.speakerName,t:state.target,tn:state.targetName})); }catch(e){}
+  }
+  // Click moves the cursor to the row and assigns it (same as Enter).
+  function selectByClick(idx){ nav.col="npc"; nav.npc=idx; toggleActorSelection(state.npcs[idx]); }
 
   function refreshButtons(){
     var hasText = document.getElementById("text").value.trim().length>0;
-    var hasTarget = !!state.target;
+    var hasActor = !!(state.speaker || state.target);
     document.querySelectorAll(".actbtn").forEach(function(b){
       var need = (b.getAttribute("data-need")||"").split(",");
       var ok = true;
-      if(need.indexOf("target")>=0 && !hasTarget) ok=false;
+      if(need.indexOf("target")>=0 && !hasActor) ok=false;
       if(need.indexOf("text")>=0 && !hasText) ok=false;
       b.classList.toggle("disabled", !ok);
     });
@@ -499,20 +895,25 @@
     if(btn.classList.contains("disabled")) return;
     var act = btn.getAttribute("data-act");
     var text = document.getElementById("text").value.trim();
-    var target = state.target || "";
-    send(act + "|" + target + "|" + text);
-    // clear the text box after a spoken/thought action
-    if(["say","transform","think","narrate"].indexOf(act)>=0){
-      document.getElementById("text").value = "";
-      refreshButtons();
-    }
-    // sleep/wake change badges -- re-pull after Papyrus has executed
-    if(["sleep","sleeptalk","wake"].indexOf(act)>=0) scheduleRefresh();
+    // payload: action|target|transform|speaker|text  (text last so it may contain '|')
+    send(act + "|" + (state.target || "") + "|" + (state.transform ? "1" : "0") + "|" + (state.speaker || "") + "|" + text);
+    // clear the text box after a spoken/thought/narrate action
+    document.getElementById("text").value = "";
+    refreshButtons();
   }
 
   function toggleDirector(){
     send("director||");
     state.director = !state.director;   // optimistic; the next push confirms
+    render();
+    scheduleRefresh();
+  }
+
+  // Whisper mode is owned by SkyrimNet (global). We just fire its toggle and let the
+  // config re-fetch (scheduleRefresh -> pwRefresh) report back the real state + radius.
+  function toggleWhisper(){
+    send("whisper||");
+    state.whisper = !state.whisper;     // optimistic; the config re-fetch confirms
     render();
     scheduleRefresh();
   }
@@ -534,12 +935,29 @@
 
   function esc(s){ return (s||"").replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];}); }
 
+  updateXform();   // reflect the restored Transform-mode state on the pill + subtitles
+
   var textBox = document.getElementById("text");
   textBox.addEventListener("input", refreshButtons);
   // Auto-pause while the text box is focused so keystrokes don't leak to other
   // mods' hotkeys (e.g. pressing 'n' while typing). Resumes on blur / close.
+  // Enter in the compose box sends: fire the armed action, or arm Say if none is.
+  // Shift+Enter inserts a newline as usual. (Enter reaches CEF here because the DLL only
+  // swallows nav keys while NOT typing.)
+  textBox.addEventListener("keydown", function(e){
+    if(e.key==="Enter" && !e.shiftKey){
+      e.preventDefault();
+      if(nav.act) fireAct(nav.act);
+      else presetAction("say");
+    }
+  });
   textBox.addEventListener("focus", function(){ window.pwConfig("typing|1"); });
-  textBox.addEventListener("blur",  function(){ window.pwConfig("typing|0"); });
+  textBox.addEventListener("blur",  function(){
+    window.pwConfig("typing|0");
+    // Hand keyboard focus back to the key-catcher so arrow-nav works again — but only
+    // if focus fell to nothing (clicked empty space), not if it moved to another field.
+    setTimeout(function(){ var a=document.activeElement; if(!a || a===document.body) focusKc(); }, 0);
+  });
   // ---- corner dot: restore saved position + free drag (while panel focused) ----
   var dot = document.getElementById("dot");
   try{
@@ -563,6 +981,181 @@
       try{ localStorage.setItem("pwDotPos", JSON.stringify({x:dot.offsetLeft, y:dot.offsetTop})); }catch(_){}
     });
   })();
+
+  // ====================== keyboard navigation ======================
+  // CEF only delivers keystrokes to the page while an editable input is focused, so the
+  // hidden #kc key-catcher is kept focused whenever we're not typing. Discrete keys are
+  // swallowed by the DLL and forwarded to pwKey(); letters reach the keydown listener:
+  //   ↑ / ↓        walk the active column (nearby cast / conversation log)
+  //   →            jump to the conversation log, select the latest message
+  //   ←            move the cast cursor to the player (PC)
+  //   Enter        (cast) assign cursor NPC: 1st = speaker, 2nd = target; (log) edit message
+  //   Tab          (cast) open the action menu on the cursor NPC, first item armed
+  //   Delete       (cast) clear the speaker/target pairing; (log) delete the focused message
+  //   1-4 / 0      arm Say/Think/Narrate/System / toggle Transform, then compose
+  //   any letter   start composing in the message box
+  function clamp(v,lo,hi){ return v<lo?lo:(v>hi?hi:v); }
+  function focusKc(){ try{ document.getElementById("kc").focus(); }catch(_){ } }
+  function npcRows(){ return Array.prototype.slice.call(document.querySelectorAll("#npcs .npc")); }
+  function logRows(){ return Array.prototype.slice.call(document.querySelectorAll("#logList .logmsg"))
+                            .filter(function(r){ return r.dataset.deleted!=="1"; }); }
+  function ctxItems(){ return Array.prototype.slice.call(document.querySelectorAll("#ctxMenu .ctxitem")); }
+  function curNpcIdx(){ return (nav.npc>=0 && nav.npc<state.npcs.length) ? nav.npc : -1; }
+
+  // Move the cast CURSOR to a row (paints .sel + reveals it). The cursor is just the
+  // keyboard pointer — Enter on it assigns speaker/target; it doesn't select anything itself.
+  function focusNpc(idx){
+    nav.col="npc";
+    if(idx<0 || idx>=state.npcs.length) return;
+    nav.npc=idx;
+    render();
+    var r=npcRows()[idx]; if(r) r.scrollIntoView({block:"nearest"});
+    focusKc();
+  }
+  // Focus a log row by index into the non-deleted set.
+  function focusLog(idx){
+    nav.col="log"; nav.log=idx;
+    var rows=logRows();
+    rows.forEach(function(r,i){ r.classList.toggle("lfocus", i===idx); });
+    if(idx>=0 && rows[idx]) rows[idx].scrollIntoView({block:"nearest"});
+    focusKc();
+  }
+  function moveCol(delta){
+    if(nav.col==="log"){
+      var rows=logRows(); if(!rows.length) return;
+      focusLog(nav.log<0 ? (delta>0?0:rows.length-1) : clamp(nav.log+delta,0,rows.length-1));
+    } else {
+      nav.col="npc"; if(!state.npcs.length) return;
+      var cur=curNpcIdx();
+      focusNpc(cur<0 ? (delta>0?0:state.npcs.length-1) : clamp(cur+delta,0,state.npcs.length-1));
+    }
+  }
+  function hlMenu(){
+    var items=ctxItems();
+    items.forEach(function(it,i){ it.classList.toggle("ksel", i===nav.menu); });
+    if(items[nav.menu]) items[nav.menu].scrollIntoView({block:"nearest"});
+  }
+  // Tab on the focused NPC: open its action menu anchored to that row's ⋯ and arm item 0.
+  function openCtxMenuKbd(){
+    var idx=curNpcIdx(); if(idx<0) return;
+    var anchor=(npcRows()[idx]||{}).querySelector ? npcRows()[idx].querySelector(".npcmenu") : null;
+    if(!anchor) return;
+    openCtxMenu(state.npcs[idx], anchor);
+    nav.menu=0; hlMenu(); focusKc();
+  }
+
+  // Switching columns clears the other column's CURSOR (not the sticky speaker/target
+  // badges): ← drops the log highlight, → drops the cast cursor.
+  function clearLogFocus(){ logRows().forEach(function(r){ r.classList.remove("lfocus"); }); nav.log=-1; }
+  function clearNpcCursor(){ if(nav.npc>=0){ nav.npc=-1; render(); } }
+
+  // Preselected action (number keys 1-4 / Enter default): arm one action button so Enter
+  // fires it, and drop into the compose box ready to type.
+  function clearActHighlight(){ document.querySelectorAll(".actbtn.presel").forEach(function(b){ b.classList.remove("presel"); }); }
+  function presetAction(act){
+    nav.act=act;
+    clearActHighlight();
+    var btn=document.querySelector('.actbtn[data-act="'+act+'"]');
+    if(btn) btn.classList.add("presel");
+    // NOTE: deliberately does NOT focus the message box. Focusing mid-keypress flips the
+    // typing state, after which the held number key's auto-repeat leaks into the box. The
+    // action is armed; type any letter to start composing (that focuses the box).
+  }
+  // Fire a preselected action by name. Returns false (and does nothing) if its button is
+  // disabled (e.g. no target/text yet) so Enter can't send an invalid command.
+  function fireAct(act){
+    var btn=document.querySelector('.actbtn[data-act="'+act+'"]');
+    if(!btn || btn.classList.contains("disabled")) return false;
+    fire(btn);                       // sends + clears the box
+    nav.act=null; clearActHighlight();
+    return true;
+  }
+
+  // Discrete navigation keys (↑ ↓ ← → Tab Delete Enter) are NOT handled here: with
+  // PrismaUI feeding CEF from the same input list other mods' RegisterForKey hooks read,
+  // any key the page sees ALSO reaches gameplay (e.g. Delete opening Modex), and
+  // preventDefault can't stop that. So the DLL swallows those keys before any consumer
+  // sees them and forwards the name here via InteropCall → pwKey(). Letters still flow
+  // through CEF normally (handled by the keydown listener below) so composing works.
+  window.pwKey = function(name){
+    if(!document.body.classList.contains("open")) return;
+
+    // An open action menu captures navigation first.
+    if(nav.menu>=0 && document.getElementById("ctxMenu").classList.contains("open")){
+      var items=ctxItems();
+      if(name==="ArrowDown"){ nav.menu=clamp(nav.menu+1,0,items.length-1); hlMenu(); return; }
+      if(name==="ArrowUp"){   nav.menu=clamp(nav.menu-1,0,items.length-1); hlMenu(); return; }
+      if(name==="Enter"||name==="Tab"){ if(items[nav.menu]) items[nav.menu].click(); return; }
+      if(name==="ArrowLeft"){ closeCtxMenu(); focusKc(); return; }   // back out
+      return;
+    }
+
+    switch(name){
+      case "ArrowDown": moveCol(1);  return;
+      case "ArrowUp":   moveCol(-1); return;
+      case "ArrowRight":                                   // → log column; drops the cast cursor
+        clearNpcCursor();
+        if(!document.body.classList.contains("logopen")){
+          toggleLog();                      // opens + async-fetches; focus latest once it loads
+          nav.col="log"; nav._focusLatestOnLoad=true;
+        } else {
+          nav.col="log"; var lr=logRows(); if(lr.length) focusLog(lr.length-1);
+        }
+        return;
+      case "ArrowLeft":                                    // ← cast column, cursor to PC; drops log highlight
+        clearLogFocus();
+        for(var i=0;i<state.npcs.length;i++){ if(state.npcs[i].player){ focusNpc(i); break; } }
+        return;
+      case "Tab":
+        if(nav.col==="npc" && curNpcIdx()>=0) openCtxMenuKbd();
+        return;
+      case "Delete":
+        if(nav.col==="log"){
+          var drows=logRows();
+          if(nav.log>=0 && nav.log<drows.length && drows[nav.log]._pwDelete){
+            drows[nav.log]._pwDelete();
+            var after=logRows();
+            if(after.length) focusLog(clamp(nav.log-1,0,after.length-1)); else nav.log=-1;
+          }
+        } else { clearPairing(); }                         // cast: clear speaker/target badges
+        return;
+      case "Enter":
+        if(nav.col==="log"){                               // edit the focused log message
+          var erows=logRows();
+          if(nav.log>=0 && nav.log<erows.length && erows[nav.log]._pwEdit){ erows[nav.log]._pwEdit(true); }
+        } else if(nav.col==="npc" && curNpcIdx()>=0){      // assign cursor NPC: speaker then target
+          toggleActorSelection(state.npcs[curNpcIdx()]);
+        } else if(nav.act){ fireAct(nav.act); }            // preselected action -> send
+        else { presetAction("say"); }                      // nothing armed -> arm Say
+        return;
+      // Number keys: arm an action (1-4) and drop into the box; 0 swaps Transform mode.
+      case "1": presetAction("say");     return;
+      case "2": presetAction("think");   return;
+      case "3": presetAction("narrate"); return;
+      case "4": presetAction("system");  return;
+      case "0": toggleTransform(); return;   // toggle only — no focus
+      case "+": togglePause(); return;       // numpad + pauses/unpauses the game
+      case "/": toggleHelp(); return;        // ? / key opens the controls window
+    }
+  };
+
+  // Letters/printable keys: start composing in the message box. (Nav keys arrive via
+  // pwKey above, not here — the DLL swallows them.)
+  document.addEventListener("keydown", function(e){
+    if(!document.body.classList.contains("open")) return;
+    if(e.key==="Escape") return;                                  // owned by the DLL
+    if(nav.menu>=0 && document.getElementById("ctxMenu").classList.contains("open")) return;  // menu has the keys
+    var ae=document.activeElement;
+    if(ae===textBox || (ae && ae.classList && ae.classList.contains("edta"))) return;  // already typing
+    // Only an actual alphabet letter starts composing. CEF delivers every key's keydown to the
+    // page (independently of the DLL), so digits/symbols would otherwise focus the box and print
+    // there — and the reserved keys (0-4, +, /) are driven by pwKey anyway. The case-difference
+    // test matches letters in any alphabet (letters have distinct upper/lower case; digits and
+    // punctuation don't).
+    if(e.key && e.key.length===1 && e.key.toLowerCase()!==e.key.toUpperCase() && !e.ctrlKey && !e.metaKey && !e.altKey){
+      textBox.focus();
+    }
+  });
 
   // Escape is driven by the DLL (the game doesn't deliver Escape to PrismaUI
   // views). When typing, the DLL calls pwBlurText to exit the box (1st Escape);

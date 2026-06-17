@@ -1031,6 +1031,75 @@ namespace
                    (be->GetIDCode() == kMouseLeft || be->GetIDCode() == kMouseRight) && !be->IsUp();
         }
 
+        // The panel's keyboard keys (DirectInput scancodes). Returns the JS name the view's
+        // pwKey() expects, or nullptr for everything else. Digits 1-4 arm an action / 0 swaps
+        // Transform; they're swallowed too so they don't trigger gameplay favourites/hotkeys.
+        static const char* NavKeyName(std::uint32_t sc)
+        {
+            switch (sc) {
+                case 0xC8: return "ArrowUp";
+                case 0xD0: return "ArrowDown";
+                case 0xCB: return "ArrowLeft";
+                case 0xCD: return "ArrowRight";
+                case 0x0F: return "Tab";
+                case 0xD3: return "Delete";
+                case 0x1C: case 0x9C: return "Enter";   // Return + numpad Enter
+                case 0x02: return "1";
+                case 0x03: return "2";
+                case 0x04: return "3";
+                case 0x05: return "4";
+                case 0x0B: return "0";
+                case 0x4E: return "+";   // numpad + -> pause/unpause
+                case 0x35: return "/";   // ? / key -> open controls window
+                default:   return nullptr;
+            }
+        }
+
+        // Swallow the navigation keys before ANY consumer sees them -- PrismaUI feeds CEF from
+        // the same InputEvent list other mods' RegisterForKey hooks read, so a key that reaches
+        // the page also reaches gameplay (Delete opening Modex, etc.) and the page can't stop it.
+        // We drop all phases of these keys and, on the initial press, forward the name to the
+        // view, which performs the actual navigation. Only runs while the panel owns input and
+        // the text box is NOT focused (typing keeps these keys for editing).
+        static void HandleNavKeys(RE::InputEvent** a_evns)
+        {
+            if (!a_evns) {
+                return;
+            }
+            RE::InputEvent* prev = nullptr;
+            RE::InputEvent* cur = *a_evns;
+            while (cur) {
+                bool drop = false;
+                if (cur->eventType == RE::INPUT_EVENT_TYPE::kButton) {
+                    if (auto* be = cur->AsButtonEvent();
+                        be && be->GetDevice() == RE::INPUT_DEVICE::kKeyboard) {
+                        if (const char* nk = NavKeyName(be->GetIDCode())) {
+                            if (be->IsDown()) {
+                                std::string name = nk;
+                                SKSE::GetTaskInterface()->AddTask([name]() {
+                                    if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
+                                        g_prisma->InteropCall(g_view, "pwKey", name.c_str());
+                                    }
+                                });
+                            }
+                            drop = true;  // swallow down/held/up so the key never reaches gameplay
+                        }
+                    }
+                }
+                if (drop) {
+                    if (prev) {
+                        prev->next = cur->next;
+                    } else {
+                        *a_evns = cur->next;
+                    }
+                    cur = cur->next;
+                } else {
+                    prev = cur;
+                    cur = cur->next;
+                }
+            }
+        }
+
         static void EnterLook()
         {
             g_lookMode.store(true);  // flip immediately so this frame stops filtering keyboard
@@ -1076,7 +1145,14 @@ namespace
                     }
                 }
             }
-            // 2) Filter for the current mode.
+            // 2) Panel navigation keys: swallow + forward to the view (always, regardless of
+            //    CaptureKeys -- nav keys must never leak to other mods' hotkeys). Skipped while
+            //    typing (the box needs them for editing) or in look mode.
+            if (g_panelOpen.load() && !g_typing.load() && !g_lookMode.load() &&
+                g_prisma && g_viewReady.load()) {
+                HandleNavKeys(a_evns);
+            }
+            // 3) Filter for the current mode.
             const bool kbFilter = g_captureKeys && g_panelOpen.load() && !g_typing.load() && !g_lookMode.load();
             if (g_wasFiltering && !kbFilter) {
                 for (auto& b : g_owned) {  // leaving keyboard-capture: forget owned presses
