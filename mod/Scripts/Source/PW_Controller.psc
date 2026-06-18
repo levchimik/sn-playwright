@@ -14,6 +14,7 @@ Bool Property RequireModifier = true Auto  ; if true, the panel key only fires w
 
 ; --- Options. ---
 Bool Property SendToBed = false Auto ; if true, EITHER sleep mode walks the NPC to the nearest bed (via SeverActions) to sleep there
+Bool Property NpcSayVerbatim = true Auto ; NPC Say w/ Transform OFF: false = literal (dialogue text/memory, not voiced), true = verbatim (voiced via narration). Default: verbatim.
 
 ; --- Sleep-talk murmuring (ambient dream-speech channel; does NOT route through the
 ;     speaker selector, so no one is ever pulled into a conversation with the sleeper). ---
@@ -404,9 +405,18 @@ EndFunction
 
 ; ------------------------------------------------------------------ say (panel speaker/target)
 ; Panel Say with the speaker/target pairing. The speaker utters the line; if a distinct
-; target is also selected, it's addressed TO them (RegisterDialogueToListener / a directed
-; DirectNarration). A lone selection acts as the speaker, so this stays back-compatible
-; with the old "select one NPC, Say" flow. xform = LLM-voiced; otherwise literal/verbatim.
+; target is also selected, it's addressed TO them. A lone selection acts as the speaker, so
+; this stays back-compatible with the old "select one NPC, Say" flow.
+;
+; PLAYER speaker: Transform ON -> TransformDialogue (LLM rephrases, voiced); Transform OFF ->
+;   the literal line as the player's dialogue (text/memory).
+; NPC speaker:
+;   Transform ON              -> DirectNarration "<Speaker> says to <Target>, rephrased: ..." so
+;                                the LLM puts the gist in the NPC's own voice and they speak it.
+;   Transform OFF + Verbatim   -> DirectNarration "... verbatim: ..." so the NPC voices the EXACT
+;     (NpcSayVerbatim == true)    line aloud.
+;   Transform OFF + Literal    -> RegisterDialogue: inject the exact words as dialogue text/memory,
+;     (NpcSayVerbatim == false)   NOT voiced (SkyrimNet only TTS's LLM-generated lines).
 Function SayPaired(Actor speaker, Actor listener, String line, Bool xform)
     If line == ""
         Return
@@ -424,38 +434,48 @@ Function SayPaired(Actor speaker, Actor listener, String line, Bool xform)
         listener = None          ; don't address yourself
     EndIf
 
-    If xform
-        ; LLM-voiced delivery.
-        If talker == pl
-            ; Player: the dedicated Transform-Dialogue pipeline (highest fidelity, voiced).
-            SkyrimNetApi.TransformDialogue(line)
-            Debug.Notification("You say it (transformed)")
+    ; ---- Player speaker ----
+    If talker == pl
+        If xform
+            SkyrimNetApi.TransformDialogue(line)   ; LLM rephrases; the player speaks it (voiced)
+            Debug.Notification("You say it (rephrased)")
+        ElseIf listener
+            SkyrimNetApi.RegisterDialogueToListener(talker, listener, line)
+            Debug.Notification("You -> " + listener.GetDisplayName())
         Else
-            ; NPC: SkyrimNet has no NPC TransformDialogue, so we frame the line as a factual
-            ; narration the speaker must voice — "<Speaker> says to <Target>: <line>" — and let
-            ; DirectNarration make THEM deliver it aloud (originator = speaker, addressed to the
-            ; listener when set). The line is quoted so the LLM delivers it, not paraphrases it.
-            String content
-            If listener
-                content = talker.GetDisplayName() + " says to " + listener.GetDisplayName() + ", verbatim: \"" + line + "\""
-            Else
-                content = talker.GetDisplayName() + " says, verbatim: \"" + line + "\""
-            EndIf
-            SkyrimNetApi.DirectNarration(content, talker, listener)
-            Debug.Notification(talker.GetDisplayName() + " says it (transformed)")
+            SkyrimNetApi.RegisterDialogue(talker, line)
+            Debug.Notification("You say it")
         EndIf
         Return
     EndIf
 
-    ; Verbatim: the chosen speaker utters the literal words, addressed to the target if distinct.
-    ; Attributed (subtitle + memory) but not voiced — SkyrimNet only TTS's LLM-generated lines.
-    If listener
+    ; ---- NPC speaker ----
+    If xform
+        ; Rephrased: narrate it so the LLM delivers the gist in the NPC's own voice (voiced).
+        SkyrimNetApi.DirectNarration(SayNarration(talker, listener, line, "rephrased"), talker, listener)
+        Debug.Notification(talker.GetDisplayName() + " says it (rephrased)")
+    ElseIf NpcSayVerbatim
+        ; Verbatim mode: narrate it so the NPC voices the EXACT line aloud.
+        SkyrimNetApi.DirectNarration(SayNarration(talker, listener, line, "verbatim"), talker, listener)
+        Debug.Notification(talker.GetDisplayName() + " says it (verbatim)")
+    ElseIf listener
+        ; Literal mode: inject the exact words as dialogue (text/memory), addressed to the target.
         SkyrimNetApi.RegisterDialogueToListener(talker, listener, line)
         Debug.Notification(talker.GetDisplayName() + " -> " + listener.GetDisplayName())
     Else
         SkyrimNetApi.RegisterDialogue(talker, line)
         Debug.Notification(talker.GetDisplayName() + " says it")
     EndIf
+EndFunction
+
+; Stage-direction narration for a voiced NPC line. mode = "verbatim" (deliver the line
+; exactly) or "rephrased" (LLM puts it in the NPC's own words). The line is quoted so the
+; LLM treats it as the content to deliver, not a scene to paraphrase freely.
+String Function SayNarration(Actor talker, Actor listener, String line, String mode)
+    If listener
+        Return talker.GetDisplayName() + " says to " + listener.GetDisplayName() + ", " + mode + ": \"" + line + "\""
+    EndIf
+    Return talker.GetDisplayName() + " says, " + mode + ": \"" + line + "\""
 EndFunction
 
 ; ------------------------------------------------------------------ think (literal NPC thought)

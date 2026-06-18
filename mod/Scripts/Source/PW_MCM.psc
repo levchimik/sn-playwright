@@ -9,6 +9,7 @@ PW_Controller _ctrl
 Int _oiPrisma
 Int _oiReqMod
 Int _oiModKey
+Int _oiNpcSay
 Int _oiSendBed
 Int _oiMurmur
 Int _oiMurmurInt
@@ -74,6 +75,9 @@ Function OnPageReset(String page)
         _oiReqMod = AddToggleOption("Require modifier", c.RequireModifier, 0)
         _oiModKey = AddKeyMapOption("Modifier key", c.ModifierKey, 0)
 
+        AddHeaderOption("Speech", 0)
+        _oiNpcSay = AddToggleOption("NPC Say aloud (verbatim)", c.NpcSayVerbatim, 0)
+
         AddHeaderOption("Options", 0)
         _oiSendBed = AddToggleOption("Send to bed (while sleeping)", c.SendToBed, 0)
         _oiMurmur  = AddToggleOption("Sleep-talk murmuring", c.SleeptalkMurmur, 0)
@@ -126,6 +130,9 @@ Function OnOptionSelect(Int option)
     If option == _oiReqMod
         c.RequireModifier = !c.RequireModifier
         SetToggleOptionValue(option, c.RequireModifier, false)
+    ElseIf option == _oiNpcSay
+        c.NpcSayVerbatim = !c.NpcSayVerbatim
+        SetToggleOptionValue(option, c.NpcSayVerbatim, false)
     ElseIf option == _oiSendBed
         c.SendToBed = !c.SendToBed
         SetToggleOptionValue(option, c.SendToBed, false)
@@ -185,6 +192,8 @@ Function OnOptionHighlight(Int option)
         SetInfoText("If ON, the panel toggle key only fires while the modifier key is held. Prevents accidental opens.")
     ElseIf option == _oiModKey
         SetInfoText("Press a key to set the modifier that must be held to arm the panel toggle key (default Left Shift).")
+    ElseIf option == _oiNpcSay
+        SetInfoText("How an NPC's 'Say' is delivered when Transform is OFF. ON = Verbatim: the NPC speaks your exact line aloud (voiced via a narration cue). OFF = Literal: the line is injected as their dialogue text/memory only, not voiced. Transform ON always has the NPC rephrase the line in their own voice. Player 'Say' is unaffected.")
     ElseIf option == _oiSendBed
         SetInfoText("If ON, entering Deep Sleep OR Sleep-talk walks the NPC to the nearest bed (via SeverActions) to sleep there. Needs SeverActions installed and a bed within ~58m; otherwise they sleep where they stand.")
     ElseIf option == _oiMurmur

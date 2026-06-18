@@ -24,8 +24,8 @@ aiming, multi-word names just work.
 | **Director Mode** | Toggle yourself out of the scene (SkyrimNet `ActorBlacklistFaction`). NPCs talk among themselves; you're unseen/unheard and narrate from outside. |
 | **Narrate** | Type a scene event; a nearby NPC voices it as a general remark to everyone present. Works in or out of Director Mode. |
 | **Prompt** | No-text nudge — prompts the selected NPC (or a nearby one) to speak/continue the scene. Player stays in the audience but isn't force-addressed. |
-| **Say** | The selected speaker's line, **verbatim** (text/subtitle + memory), optionally addressed to a paired target. *Not voiced* — SkyrimNet can't TTS an arbitrary literal line. |
-| **Transform** | The selected NPC speaks an **LLM-phrased** line from your gist, in their voice (voiced). The spoken sibling of Say. |
+| **Say** | The selected speaker's line, optionally addressed to a paired target. NPC delivery (Transform off) is an MCM choice: **Literal** (dialogue text/memory, not voiced) or **Verbatim** (the NPC voices the exact line aloud, via a narration cue). |
+| **Transform** | Say with Transform **on** — the speaker delivers a **rephrased** line in their own voice (voiced). Player uses SkyrimNet's TransformDialogue; an NPC is cued via narration ("…says…, rephrased: …"). |
 | **Think** | Inject a private, unvoiced **thought** into the selected NPC (verbatim, or LLM-phrased from your gist). |
 | **Deep Sleep** | Selected NPC (or the player) goes deeply unconscious — deaf, unselectable, others see them out cold. Optional walk-to-bed. |
 | **Sleep-talk** | Like Deep Sleep but they may murmur dream fragments aloud (ambient channel; never pulls others into conversation). Optional walk-to-bed. |
@@ -39,7 +39,8 @@ decorators).
 
 Press the panel key (**Shift+F11** by default — bind/rebind **Open PrismaUI Panel**
 and its modifier in the MCM) to open a left-side panel. It lists the nearby cast (distance-sorted, with **asleep** /
-**murmuring** badges) plus a **(you)** row at the top. Click a name to target it,
+**murmuring** state badges, an orange **pinned** badge for SkyrimNet-pinned NPCs, and a
+green **follower** badge) plus a **(you)** row at the top. Click a name to target it,
 type into the text box, and hit an action: **Say / Transform / Think / Prompt /
 Narrate / Deep Sleep / Sleep-talk / Wake**, plus a **Director** toggle in the
 header. Buttons grey out until their needs are met (a target and/or text). Escape or
@@ -88,7 +89,8 @@ the view (so they never leak to other mods' hotkeys, e.g. Modex):
 | **Tab** | Open the action menu (then walkable with ↑/↓). |
 | **1 – 4** | Arm **Say / Think / Transform / System** (no text focus, the digit isn't printed). |
 | **0** | Toggle **Transform** (LLM-phrased/voiced) vs verbatim mode. |
-| **+** *(numpad)* | Pause / unpause the game. |
+| **=** | Pause / unpause the game. |
+| **.** | Toggle SkyrimNet whisper mode. |
 | **? / `/`** | Open the controls (help) window. |
 | **any letter** | Start typing into the message box. |
 
@@ -103,6 +105,9 @@ the game is paused.
   to open the panel, so don't leave it unbound. A **modifier** gate (default Left Shift,
   ON) means it only fires while the modifier is held — i.e. **Shift+F11**; rebind the key
   or turn the modifier off here.
+- **Speech** — **NPC Say aloud (verbatim)**: when Transform is off and an NPC is the
+  speaker, ON voices your exact line aloud (verbatim); OFF injects it as dialogue
+  text/memory only (literal). Default ON. (Transform on always rephrases in their voice.)
 - **Options** — **Send to bed (while sleeping)** and **Sleep-talk murmuring** (with
   interval/chance sliders).
 - **Status** — live Director state plus quick buttons: **Director** toggle, **Deep
@@ -138,9 +143,15 @@ interface), PapyrusUtil (StorageUtil), and SeverActions (walk-to-bed + JSON help
 
 - Director Mode needs **2+ SkyrimNet NPCs** near each other to produce NPC-to-NPC
   dialogue.
-- **Say** is text-only (verbatim, not voiced) by design — use **Transform** for a
-  voiced line.
+- **Say** has three deliveries: **Literal** (text/memory only, not voiced), **Verbatim**
+  (voiced exactly — MCM Speech toggle, default on), and **Transform-on** (voiced, rephrased
+  in the NPC's voice). Verbatim/rephrased lean on a narration cue, so fidelity is
+  prompt-dependent.
 - The prompt overrides are copies of SkyrimNet's prompts; if SkyrimNet updates those
   files, re-sync the gated branches.
 - The `~55s` SkyrimNet decorator cache means faction-driven states (asleep, Director
   absence) can lag up to a minute after toggling.
+- While the panel is open it **captures keyboard input** so its keys (letters to
+  compose, etc.) don't also trigger other mods' hotkeys; **Escape** and **right-mouse
+  look** still pass through. Toggle this with `SNPlaywright.ini` → `[Behavior]
+  CaptureKeys` (read at game launch, so restart to apply).

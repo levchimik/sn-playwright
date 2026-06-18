@@ -189,6 +189,7 @@
     box-shadow:0 10px 32px rgba(0,0,0,0.6);padding:4px;z-index:10000;pointer-events:auto;
   }
   .ctxmenu.open{display:flex;}
+  body:not(.open) .ctxmenu{display:none;}  /* never show the action menu while the panel is collapsed */
   .ctxitem{font-size:12px;padding:8px 12px;border-radius:5px;cursor:pointer;color:var(--fg);white-space:nowrap;}
   .ctxitem:hover{background:var(--bg2);color:var(--accent);}
   .ctxitem.danger:hover{color:var(--danger);}
@@ -201,6 +202,8 @@
   /* Speaker/target pairing badges (Enter assigns: 1st = speaker, 2nd = target). */
   .badge.spkr{background:rgba(201,161,74,0.22);color:var(--accent);font-weight:600;}
   .badge.tgt{background:rgba(127,168,214,0.22);color:var(--accent2);font-weight:600;}
+  .badge.pinned{background:rgba(230,145,60,0.22);color:#e89a55;}      /* SkyrimNet pinned */
+  .badge.follower{background:rgba(120,190,120,0.20);color:#86cf86;}   /* player's follower */
   .empty{color:var(--muted);font-size:13px;text-align:center;padding:24px 12px;font-style:italic;}
 
   footer{border-top:1px solid var(--line);padding:12px 14px;}
@@ -297,9 +300,10 @@
     <div class="krow"><span class="k"><span class="kkey">Enter</span></span><span class="kd">Send (arms Say if nothing is armed) &middot; <span class="kkey">Shift</span>+<span class="kkey">Enter</span> = new line</span></div>
 
     <div class="kgrp">General</div>
-    <div class="krow"><span class="k"><span class="kkey">Esc</span></span><span class="kd">Leave the box, then close the panel</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Esc</span></span><span class="kd">Cancel an edit / leave the box, then close the panel</span></div>
     <div class="krow"><span class="k"><span class="kkey">RMB</span></span><span class="kd">Hold to look / reposition without closing</span></div>
-    <div class="krow"><span class="k"><span class="kkey">Num +</span></span><span class="kd">Pause / unpause the game</span></div>
+    <div class="krow"><span class="k"><span class="kkey">=</span></span><span class="kd">Pause / unpause the game</span></div>
+    <div class="krow"><span class="k"><span class="kkey">.</span></span><span class="kd">Toggle SkyrimNet whisper mode</span></div>
     <div class="krow"><span class="k"><span class="kkey">?</span> <span class="kkey">/</span></span><span class="kd">Open / close this controls window</span></div>
   </div>
 </div>
@@ -331,10 +335,12 @@
     } else {
       // Closing: wipe the compose box. The Shift+key close combo reaches CEF too (keys aren't
       // captured), so its printable character leaks into the box via the type-to-compose path;
-      // clearing on close keeps it from lingering. Also disarm any preselected action.
+      // clearing on close keeps it from lingering. Also disarm any preselected action and close
+      // any open action menu (it would otherwise hang on screen after the panel collapses).
       try{
         var tb=document.getElementById("text"); if(tb) tb.value="";
         nav.act=null; clearActHighlight(); refreshButtons();
+        closeCtxMenu();
       }catch(e){}
     }
   };
@@ -400,14 +406,14 @@
 
   // A "stub" narration is Playwright scaffolding, not a real scene beat:
   //   * empty text   -> a Prompt DirectNarration("", npc) / sleep-talk murmur trigger
-  //   * '... verbatim: "..."' -> the say-transform stage direction we feed an NPC speaker
+  //   * '... verbatim/rephrased: "..."' -> the say stage direction we feed an NPC speaker
   // Once the scene has moved past it (the NPC has spoken), it's just noise to clean out.
   function isStubNarration(ev){
     var t=(ev.type||ev.eventType||"").toLowerCase();
     if(t.indexOf("narration")<0) return false;
     var tx=logText(ev).trim();
     if(tx==="") return true;                        // empty Prompt / murmur trigger
-    if(tx.indexOf('verbatim: "')>=0) return true;   // say-transform stage direction
+    if(tx.indexOf('verbatim: "')>=0 || tx.indexOf('rephrased: "')>=0) return true;   // say stage direction
     return false;
   }
   var _pwDeletedNarr = {};   // ids we've already auto-deleted, so we don't re-attempt every fetch
@@ -494,6 +500,7 @@
       ta.focus();
       try{ if(selectAll) ta.select(); else ta.setSelectionRange(ta.value.length, ta.value.length); }catch(_){}
       function close(){ window.pwConfig("typing|0"); ed.remove(); txEl.style.display=""; la.style.display=""; focusKc(); }
+      ed._pwCancel = close;   // let the DLL's Escape (routed via pwBlurText) cancel this edit
       function commit(){
         var nv=ta.value;
         // Resend the whole data object (speaker preserved), not just the new text.
@@ -504,6 +511,7 @@
       save.onclick=commit;
       // Keyboard while editing: Enter saves, Shift+Enter inserts a newline, Escape cancels.
       ta.addEventListener("keydown", function(e){
+        if(e.key==="Tab"){ e.preventDefault(); return; }   // keep focus in the editor
         if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); e.stopPropagation(); commit(); }
         else if(e.key==="Escape"){ e.preventDefault(); e.stopPropagation(); close(); }
       });
@@ -741,7 +749,7 @@
       // which jitters every poll. Lets the 1 Hz poll skip the DOM rebuild when nothing meaningful
       // changed, so an open ⋯ menu / selection survives while you reposition.
       var sig = (d.directorMode?1:0)+"|"+(d.pauseGame?1:0)+"|"+(d.whisper?1:0)+"|"+
-                npcs.map(function(n){return n.id+":"+n.state+":"+n.dist+(n.player?"P":"");}).join(",");
+                npcs.map(function(n){return n.id+":"+n.state+":"+n.dist+(n.player?"P":"")+(n.follower?"F":"")+(n.pinned?"X":"");}).join(",");
       state.npcs = npcs;
       state.director = !!d.directorMode;
       state.pause = !!d.pauseGame;
@@ -791,6 +799,8 @@
         var badge = "";
         if(n.state==="asleep")    badge = '<span class="badge asleep">asleep</span>';
         else if(n.state==="sleeptalk") badge = '<span class="badge sleeptalk">murmuring</span>';
+        if(n.pinned) badge += ' <span class="badge pinned">pinned</span>';
+        if(n.follower) badge += ' <span class="badge follower">follower</span>';
         if(n.crosshair) badge += ' <span class="badge xhair">crosshair</span>';
         if(state.speaker===n.id) badge += ' <span class="badge spkr">speaker</span>';
         if(state.target===n.id)  badge += ' <span class="badge tgt">target</span>';
@@ -945,6 +955,7 @@
   // Shift+Enter inserts a newline as usual. (Enter reaches CEF here because the DLL only
   // swallows nav keys while NOT typing.)
   textBox.addEventListener("keydown", function(e){
+    if(e.key==="Tab"){ e.preventDefault(); return; }   // keep focus in the box; don't tab focus away
     if(e.key==="Enter" && !e.shiftKey){
       e.preventDefault();
       if(nav.act) fireAct(nav.act);
@@ -1134,8 +1145,9 @@
       case "3": presetAction("narrate"); return;
       case "4": presetAction("system");  return;
       case "0": toggleTransform(); return;   // toggle only — no focus
-      case "+": togglePause(); return;       // numpad + pauses/unpauses the game
-      case "/": toggleHelp(); return;        // ? / key opens the controls window
+      case "=": togglePause();   return;     // '=' key pauses/unpauses the game
+      case ".": toggleWhisper(); return;     // '.' key toggles SkyrimNet whisper mode
+      case "/": toggleHelp();    return;     // ? / key opens the controls window
     }
   };
 
@@ -1161,6 +1173,11 @@
   // views). When typing, the DLL calls pwBlurText to exit the box (1st Escape);
   // otherwise it collapses the panel directly (2nd Escape / not typing).
   window.pwBlurText = function(){
+    // If a log message is being edited, the first Escape cancels that edit (reverts it).
+    // Otherwise it just exits the compose box. (The .edta's own Escape handler can't fire —
+    // the game doesn't deliver Escape to CEF — so the DLL routes Escape through here.)
+    var openEd = document.querySelector("#logList .ed");
+    if(openEd && openEd._pwCancel){ openEd._pwCancel(); return; }
     try{ textBox.blur(); document.getElementById("kc").focus(); }catch(_){}
   };
   // Initial data arrives when the panel is opened (C++ pushes on toggle), so no

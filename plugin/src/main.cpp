@@ -73,10 +73,13 @@ namespace
         std::uint32_t formID = 0;
         std::string   name;       // raw (unescaped) display name from SkyrimNet
         float         distUnits = 0.0f;
+        std::string   uuid;       // SkyrimNet actor UUID (used to match the "Pinned" group)
     };
     std::mutex               g_sceneMutex;
     std::vector<SceneActor>  g_scene;            // guarded by g_sceneMutex
     std::atomic<bool>        g_sceneValid{false};  // a SkyrimNet fetch has succeeded at least once
+    std::mutex               g_pinnedMutex;
+    std::vector<std::string> g_pinnedUuids;       // UUIDs in SkyrimNet's "Pinned" group; guarded by g_pinnedMutex
 
     constexpr const char* EVT_COMMAND = "PW_PrismaCommand";  // DLL -> Papyrus (action payload)
     constexpr float       UNITS_PER_M = 70.0f;
@@ -373,7 +376,76 @@ namespace
         std::string id;     // "0xXXXXXXXX"
         int         dist;   // meters
         const char* state;  // "awake" | "asleep" | "sleeptalk"
+        bool        follower = false;  // the player's teammate/follower
+        bool        pinned = false;    // member of SkyrimNet's "Pinned" group
     };
+
+    // Refresh SkyrimNet's "Pinned" NPC group (dashboard pins) into g_pinnedUuids. Two cheap localhost
+    // queries: /npc-groups?api=list to find the group named "Pinned" -> its id, then ?api=members&id=<id>
+    // for the member UUIDs. BuildNpcJson matches these against each cast actor's uuid to flag pinned.
+    // Runs OFF the main thread (HTTP). On any HTTP failure we KEEP the last good set (no blink).
+    void FetchPinnedBlocking()
+    {
+        const std::string list = HttpRequest(L"GET", "/npc-groups?api=list", "");
+        if (list.empty()) {
+            return;  // server off -> keep last good pinned set
+        }
+        int groupId = -1;
+        {
+            const size_t gp = list.find("\"groups\"");
+            const size_t lb = (gp != std::string::npos) ? list.find('[', gp) : std::string::npos;
+            const size_t rb = (lb != std::string::npos) ? list.find(']', lb) : std::string::npos;
+            size_t pos = (lb != std::string::npos) ? lb + 1 : std::string::npos;
+            while (pos != std::string::npos && pos < rb) {
+                const size_t os = list.find('{', pos);
+                if (os == std::string::npos || os > rb) {
+                    break;
+                }
+                const size_t oe = list.find('}', os);  // group objects are flat
+                if (oe == std::string::npos || oe > rb) {
+                    break;
+                }
+                const std::string obj = list.substr(os, oe - os + 1);
+                pos = oe + 1;
+                if (JsonStr(obj, "name") == "Pinned") {
+                    groupId = static_cast<int>(JsonNum(obj, "id", 0, -1.0f));
+                    break;
+                }
+            }
+        }
+        std::vector<std::string> pinned;  // empty (with a successful list fetch) = genuinely nothing pinned
+        if (groupId >= 0) {
+            const std::string mem =
+                HttpRequest(L"GET", "/npc-groups?api=members&id=" + std::to_string(groupId), "");
+            if (mem.empty()) {
+                return;  // transient members-fetch failure -> keep last good set
+            }
+            const size_t mp = mem.find("\"members\"");
+            const size_t lb = (mp != std::string::npos) ? mem.find('[', mp) : std::string::npos;
+            const size_t rb = (lb != std::string::npos) ? mem.find(']', lb) : std::string::npos;
+            size_t pos = (lb != std::string::npos) ? lb + 1 : std::string::npos;
+            while (pos != std::string::npos && pos < rb) {
+                const size_t os = mem.find('{', pos);
+                if (os == std::string::npos || os > rb) {
+                    break;
+                }
+                const size_t oe = mem.find('}', os);  // member objects are flat
+                if (oe == std::string::npos || oe > rb) {
+                    break;
+                }
+                const std::string obj = mem.substr(os, oe - os + 1);
+                pos = oe + 1;
+                std::string uuid = JsonStr(obj, "uuid");
+                if (!uuid.empty()) {
+                    pinned.push_back(std::move(uuid));
+                }
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_pinnedMutex);
+            g_pinnedUuids.swap(pinned);
+        }
+    }
 
     // Pull SkyrimNet's nearby/addressable cast and cache it in g_scene. Runs OFF the main thread (HTTP).
     //
@@ -430,7 +502,7 @@ namespace
                 if (formID == 0) {
                     continue;
                 }
-                scene.push_back(SceneActor{ formID, JsonStr(obj, "name"), JsonNum(obj, "distance", 0, 0.0f) });
+                scene.push_back(SceneActor{ formID, JsonStr(obj, "name"), JsonNum(obj, "distance", 0, 0.0f), JsonStr(obj, "uuid") });
             }
         }
         {
@@ -438,6 +510,7 @@ namespace
             g_scene.swap(scene);
         }
         g_sceneValid.store(true);
+        FetchPinnedBlocking();  // refresh SkyrimNet's "Pinned" group alongside the cast (cheap localhost)
     }
 
     // Build the {"directorMode":bool,"npcs":[...]} payload. Primary source is SkyrimNet's scene snapshot
@@ -458,10 +531,23 @@ namespace
             // to tag sleep state AND to measure the live distance ourselves from the actor's real position
             // (fresher than the fetch-time snapshot). sa.distUnits is only a backstop if the actor is gone.
             const RE::NiPoint3 ppos = pc->GetPosition();
+            std::vector<std::string> pinnedUuids;
+            {
+                std::lock_guard<std::mutex> plk(g_pinnedMutex);
+                pinnedUuids = g_pinnedUuids;
+            }
             std::lock_guard<std::mutex> lock(g_sceneMutex);
             for (const auto& sa : g_scene) {
                 const char* st = "awake";
                 float du = sa.distUnits;
+                bool follower = false;
+                bool pinned = false;
+                for (const auto& pu : pinnedUuids) {
+                    if (pu == sa.uuid) {
+                        pinned = true;
+                        break;
+                    }
+                }
                 if (auto* a = RE::TESForm::LookupByID<RE::Actor>(sa.formID)) {
                     du = ppos.GetDistance(a->GetPosition());
                     if (g_facAsleep && a->IsInFaction(g_facAsleep)) {
@@ -469,6 +555,7 @@ namespace
                     } else if (g_facSleeptalk && a->IsInFaction(g_facSleeptalk)) {
                         st = "sleeptalk";
                     }
+                    follower = a->IsPlayerTeammate();
                 }
                 char idbuf[16];
                 std::snprintf(idbuf, sizeof(idbuf), "0x%08X", sa.formID);
@@ -476,7 +563,9 @@ namespace
                     JsonEsc(sa.name.c_str()),
                     idbuf,
                     static_cast<int>(du / UNITS_PER_M + 0.5f),
-                    st });
+                    st,
+                    follower,
+                    pinned });
             }
         } else if (auto* lists = RE::ProcessLists::GetSingleton()) {
             // FALLBACK (SkyrimNet web server unreachable): approximate locally.
@@ -510,7 +599,8 @@ namespace
                     JsonEsc(a->GetDisplayFullName()),
                     idbuf,
                     static_cast<int>(du / UNITS_PER_M + 0.5f),
-                    st });
+                    st,
+                    a->IsPlayerTeammate() });
             }
         }
 
@@ -554,7 +644,11 @@ namespace
             json += std::to_string(e.dist);
             json += ",\"state\":\"";
             json += e.state;
-            json += "\"}";
+            json += "\",\"follower\":";
+            json += e.follower ? "true" : "false";
+            json += ",\"pinned\":";
+            json += e.pinned ? "true" : "false";
+            json += "}";
         }
         json += "]}";
         return json;
@@ -1049,7 +1143,8 @@ namespace
                 case 0x04: return "3";
                 case 0x05: return "4";
                 case 0x0B: return "0";
-                case 0x4E: return "+";   // numpad + -> pause/unpause
+                case 0x0D: return "=";   // '=' key -> pause/unpause
+                case 0x34: return ".";   // '.' key -> toggle whisper mode
                 case 0x35: return "/";   // ? / key -> open controls window
                 default:   return nullptr;
             }
@@ -1152,8 +1247,14 @@ namespace
                 g_prisma && g_viewReady.load()) {
                 HandleNavKeys(a_evns);
             }
-            // 3) Filter for the current mode.
-            const bool kbFilter = g_captureKeys && g_panelOpen.load() && !g_typing.load() && !g_lookMode.load();
+            // 3) Filter for the current mode. While TYPING we ALWAYS swallow keyboard input from
+            //    other consumers: the text box receives keys via CEF independently, so removing them
+            //    from the game's input list here doesn't affect editing -- it only stops them leaking
+            //    to gameplay/other mods (Tab opening OAR's menu, Delete reaching Modex, etc.). While
+            //    NOT typing, swallow the non-nav keys only when CaptureKeys is on (the nav keys were
+            //    already taken by HandleNavKeys above).
+            const bool kbFilter = g_panelOpen.load() && !g_lookMode.load() &&
+                                  (g_typing.load() || g_captureKeys);
             if (g_wasFiltering && !kbFilter) {
                 for (auto& b : g_owned) {  // leaving keyboard-capture: forget owned presses
                     b = false;
