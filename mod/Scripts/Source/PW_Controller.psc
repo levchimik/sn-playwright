@@ -59,18 +59,20 @@ EndFunction
 ; system. Never the player. Needs SeverActions loaded. SeverActions' native
 ; FindFurnitureByFormID resolves a base FormID to the nearest placed instance and
 ; its sandbox package walks the actor there to use it (i.e. sleep).
-Function SendActorToBed(Actor t)
+; Returns true if the actor was actually sent to a bed. Never the player; needs
+; SeverActions and a bed. When no bed is found the actor just sleeps where they stand.
+Bool Function SendActorToBed(Actor t)
     If t == Game.GetPlayer()
-        Return
+        Return false
     EndIf
     If Game.GetModByName("SeverActions.esp") == 255
         Debug.Notification("Send to bed needs SeverActions installed")
-        Return
+        Return false
     EndIf
     ObjectReference bed = FindNearestBed(t)
     If !bed
         Debug.Notification("No bed nearby for " + t.GetDisplayName())
-        Return
+        Return false
     EndIf
     ; Pass the PLACED reference's FormID (as hex) so SeverActions resolves THIS exact
     ; bed directly. Passing the base object's FormID instead forces a BaseID->RefID
@@ -78,6 +80,17 @@ Function SendActorToBed(Actor t)
     ; than that and leaves the NPC standing while our notification still fires.
     SeverActions_Furniture.UseFurniture_Global_Execute(t, FormIDToHex(bed.GetFormID()))
     Debug.Notification(t.GetDisplayName() + " is heading to bed")
+    Return true
+EndFunction
+
+; Position a freshly-asleep actor. If "Send to bed" is on we walk them to the
+; nearest bed (never the player); otherwise they sleep where they stand. (A
+; ragdoll/paralysis fallback was tried but never held a HELD ragdoll in this load
+; order — see KNOWLEDGEBASE — so it was scrapped in favour of bed-only.)
+Function PlaceSleeper(Actor t)
+    If SendToBed
+        SendActorToBed(t)
+    EndIf
 EndFunction
 
 ; Get a sent-to-bed NPC back up (no-op if they aren't using furniture).
@@ -262,15 +275,15 @@ Function ToggleAsleepActor(Actor t)
         If !wasTalk
             BeginDeaf(t)
         EndIf
-        ; Only (re)position to bed when coming from awake — a deep<->talk switch keeps
-        ; whatever furniture state they already had, so we don't bounce them out of bed.
-        If SendToBed && !wasTalk
-            SendActorToBed(t)
-        EndIf
         ; Tell SkyrimNet so nearby NPCs perceive the state change. RegisterPersistentEvent
         ; informs without triggering a dialogue reaction, so it adds no new leak vector.
         SkyrimNetApi.RegisterPersistentEvent(t.GetDisplayName() + " has fallen into a deep, unresponsive sleep.", t, None)
         Debug.Notification(t.GetDisplayName() + " is in a deep sleep")
+        ; Position LAST so the walk-to-bed never delays the notification above. Only when
+        ; coming from awake; a deep<->talk switch keeps whatever bed state they already had.
+        If !wasTalk
+            PlaceSleeper(t)
+        EndIf
     EndIf
 EndFunction
 
@@ -306,14 +319,14 @@ Function ToggleSleeptalkActor(Actor t)
         If !wasDeep
             BeginDeaf(t)
         EndIf
-        ; Same walk-to-bed as Deep Sleep when enabled; skip on a deep<->talk switch so we
-        ; keep their existing furniture state instead of bouncing them out of bed.
-        If SendToBed && !wasDeep
-            SendActorToBed(t)
-        EndIf
         StartMurmurLoop()
         SkyrimNetApi.RegisterPersistentEvent(t.GetDisplayName() + " has drifted into a restless sleep, murmuring softly.", t, None)
         Debug.Notification(t.GetDisplayName() + " is now sleep-talking")
+        ; Position LAST so the walk-to-bed never delays the notification above. Only when
+        ; coming from awake; a deep<->talk switch keeps whatever bed state they already had.
+        If !wasDeep
+            PlaceSleeper(t)
+        EndIf
     EndIf
 EndFunction
 
@@ -405,8 +418,8 @@ EndFunction
 
 ; ------------------------------------------------------------------ say (panel speaker/target)
 ; Panel Say with the speaker/target pairing. The speaker utters the line; if a distinct
-; target is also selected, it's addressed TO them. A lone selection acts as the speaker, so
-; this stays back-compatible with the old "select one NPC, Say" flow.
+; target is also selected, it's addressed TO them. The PLAYER is the default speaker, so a lone
+; selection is the TARGET (you say it to them); pick a 2nd actor to make THAT one the speaker.
 ;
 ; PLAYER speaker: Transform ON -> TransformDialogue (LLM rephrases, voiced); Transform OFF ->
 ;   the literal line as the player's dialogue (text/memory).
@@ -424,11 +437,7 @@ Function SayPaired(Actor speaker, Actor listener, String line, Bool xform)
     Actor pl = Game.GetPlayer()
     Actor talker = speaker
     If !talker
-        talker = listener        ; only one selected -> they speak it
-        listener = None
-    EndIf
-    If !talker
-        Return
+        talker = pl              ; no explicit speaker -> the player is the default speaker
     EndIf
     If listener == talker
         listener = None          ; don't address yourself
@@ -439,12 +448,17 @@ Function SayPaired(Actor speaker, Actor listener, String line, Bool xform)
         If xform
             SkyrimNetApi.TransformDialogue(line)   ; LLM rephrases; the player speaks it (voiced)
             Debug.Notification("You say it (rephrased)")
-        ElseIf listener
-            SkyrimNetApi.RegisterDialogueToListener(talker, listener, line)
-            Debug.Notification("You -> " + listener.GetDisplayName())
         Else
-            SkyrimNetApi.RegisterDialogue(talker, line)
-            Debug.Notification("You say it")
+            ; Transform off: record the exact line to context, then voice it aloud. RegisterDialogue
+            ; only logs it (silent); TriggerPlayerTTS sends the literal line straight to TTS (direct,
+            ; no LLM), so the player actually pronounces it.
+            If listener
+                SkyrimNetApi.RegisterDialogueToListener(talker, listener, line)
+            Else
+                SkyrimNetApi.RegisterDialogue(talker, line)
+            EndIf
+            SkyrimNetApi.TriggerPlayerTTS(line)
+            Debug.Notification("You say it aloud")
         EndIf
         Return
     EndIf
@@ -571,6 +585,10 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
         ToggleDirector()
     ElseIf action == "whisper"
         SkyrimNetApi.TriggerToggleWhisperMode()   ; global: swaps interaction.maxDistance (normal <-> whisper)
+    ElseIf action == "interrupt"
+        SkyrimNetApi.TriggerInterruptDialogue()   ; global: cut off in-progress NPC speech + pending generation queues
+    ElseIf action == "continuous"
+        SkyrimNetApi.TriggerToggleContinuousMode()  ; global: autonomous-scene mode (needs GameMaster enabled)
     ElseIf action == "prompt"
         PromptActor(primary)
     ElseIf action == "narrate"

@@ -34,6 +34,8 @@ namespace
     RE::TESFaction* g_facAsleep = nullptr;     // PW_AsleepFaction    0x801 SNPlaywright.esp
     RE::TESFaction* g_facSleeptalk = nullptr;  // PW_SleeptalkFaction 0x803 SNPlaywright.esp
     RE::TESFaction* g_facBlacklist = nullptr;  // SkyrimNet ActorBlacklistFaction 0x12DB SkyrimNet.esp
+    RE::BGSPerk*    g_perkTelepathy = nullptr;       // SkyrimNet_TelepathyPerk          0x12DD SkyrimNet.esp
+    RE::BGSPerk*    g_perkTelepathyCanon = nullptr;  // SkyrimNet_TelepathyCanonicalPerk 0x12DE SkyrimNet.esp
 
     bool              g_pauseGame = false;   // manual "Pause" pill, persisted (ini [Behavior] PauseGame)
     bool              g_captureKeys = false; // [Behavior] CaptureKeys: steal keys from other mods while open
@@ -232,6 +234,8 @@ namespace
         g_facAsleep = dh->LookupForm<RE::TESFaction>(0x801, "SNPlaywright.esp");
         g_facSleeptalk = dh->LookupForm<RE::TESFaction>(0x803, "SNPlaywright.esp");
         g_facBlacklist = dh->LookupForm<RE::TESFaction>(0x12DB, "SkyrimNet.esp");
+        g_perkTelepathy = dh->LookupForm<RE::BGSPerk>(0x12DD, "SkyrimNet.esp");
+        g_perkTelepathyCanon = dh->LookupForm<RE::BGSPerk>(0x12DE, "SkyrimNet.esp");
     }
 
     bool IsDirectorOn()
@@ -618,6 +622,13 @@ namespace
         json += g_pauseGame ? "true" : "false";
         json += ",\"whisper\":";
         json += g_whisperOn.load() ? "true" : "false";
+        // Telepathy: the player perceives NPC thoughts only with a SkyrimNet Telepathy perk
+        // (basic or canonical). The view uses this to show/hide npc_thoughts in the log.
+        json += ",\"telepathy\":";
+        json += ((g_perkTelepathy && pc->HasPerk(g_perkTelepathy)) ||
+                 (g_perkTelepathyCanon && pc->HasPerk(g_perkTelepathyCanon)))
+                    ? "true"
+                    : "false";
         json += ",\"radius\":";
         json += std::to_string(static_cast<int>(maxUnits / UNITS_PER_M + 0.5f));
         json += ",\"npcs\":[";
@@ -1143,6 +1154,8 @@ namespace
                 case 0x04: return "3";
                 case 0x05: return "4";
                 case 0x0B: return "0";
+                case 0x0C: return "-";   // '-' key -> interrupt dialogue
+                case 0x33: return ",";   // ',' key -> toggle continuous mode
                 case 0x0D: return "=";   // '=' key -> pause/unpause
                 case 0x34: return ".";   // '.' key -> toggle whisper mode
                 case 0x35: return "/";   // ? / key -> open controls window
@@ -1285,15 +1298,38 @@ namespace
         static inline REL::Relocation<decltype(&Dispatch)> _orig;
     };
 
+    // interrupt / whisper / continuous are SkyrimNet "simulate the hotkey" natives that the engine
+    // ignores while a menu owns input -- and our panel holds menu focus the whole time it's open
+    // (SkyrimNet's own wheel sidesteps this by closing before it fires). So briefly release focus --
+    // the panel stays visible, like RMB look-mode -- fire the trigger via Papyrus, then refocus once
+    // the VM has had time to run it. The sim checks menu state at execution time, so focus must still
+    // be released when it actually runs; 450ms covers the ModEvent->Papyrus latency.
+    void FireUnfocused(const std::string& s)
+    {
+        SKSE::GetTaskInterface()->AddTask([s]() {
+            GuardedUnfocus();
+            SendCommandToPapyrus(s);
+        });
+        std::thread([]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(450));
+            SKSE::GetTaskInterface()->AddTask([]() {
+                if (g_panelOpen.load() && !g_lookMode.load() && g_prisma && g_viewReady.load() &&
+                    g_prisma->IsValid(g_view) && !g_prisma->HasFocus(g_view)) {
+                    GuardedFocus(g_appliedPause);
+                }
+            });
+        }).detach();
+    }
+
     // ---- JS listener callbacks (free functions: no captures) ----
     void OnJsCommand(const char* a_arg)
     {
         const std::string s = a_arg ? a_arg : "";
         logger::info("JS command -> {}", s.empty() ? "(null)" : s.c_str());
-        // Whisper is handled in-DLL over HTTP (the Papyrus native no-ops from our context);
-        // everything else still routes to PW_Controller.
-        if (s.substr(0, s.find('|')) == "whisper") {
-            ToggleWhisperAsync();
+        // These three no-op while the panel holds focus -- fire them with focus briefly released.
+        const std::string action = s.substr(0, s.find('|'));
+        if (action == "whisper" || action == "interrupt" || action == "continuous") {
+            FireUnfocused(s);
             return;
         }
         SendCommandToPapyrus(s);

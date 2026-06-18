@@ -27,8 +27,8 @@ aiming, multi-word names just work.
 | **Say** | The selected speaker's line, optionally addressed to a paired target. NPC delivery (Transform off) is an MCM choice: **Literal** (dialogue text/memory, not voiced) or **Verbatim** (the NPC voices the exact line aloud, via a narration cue). |
 | **Transform** | Say with Transform **on** — the speaker delivers a **rephrased** line in their own voice (voiced). Player uses SkyrimNet's TransformDialogue; an NPC is cued via narration ("…says…, rephrased: …"). |
 | **Think** | Inject a private, unvoiced **thought** into the selected NPC (verbatim, or LLM-phrased from your gist). |
-| **Deep Sleep** | Selected NPC (or the player) goes deeply unconscious — deaf, unselectable, others see them out cold. Optional walk-to-bed. |
-| **Sleep-talk** | Like Deep Sleep but they may murmur dream fragments aloud (ambient channel; never pulls others into conversation). Optional walk-to-bed. |
+| **Deep Sleep** | Selected NPC (or the player) goes deeply unconscious — deaf, unselectable, others see them out cold. Optional walk-to-bed, or collapse-to-floor (ragdoll). |
+| **Sleep-talk** | Like Deep Sleep but they may murmur dream fragments aloud (ambient channel; never pulls others into conversation). Optional walk-to-bed, or collapse-to-floor (ragdoll). |
 
 Deep Sleep / Sleep-talk also work **on the player** (Self), and a woken actor
 permanently "forgets" what was said while they were out (a per-actor deaf-window
@@ -89,6 +89,8 @@ the view (so they never leak to other mods' hotkeys, e.g. Modex):
 | **Tab** | Open the action menu (then walkable with ↑/↓). |
 | **1 – 4** | Arm **Say / Think / Transform / System** (no text focus, the digit isn't printed). |
 | **0** | Toggle **Transform** (LLM-phrased/voiced) vs verbatim mode. |
+| **-** | **Interrupt** — cut off all in-progress NPC speech + pending generation (the F12 interrupt). |
+| **,** | Toggle **continuous** (autonomous-scene) mode — NPCs keep talking on their own (needs SkyrimNet GameMaster enabled). |
 | **=** | Pause / unpause the game. |
 | **.** | Toggle SkyrimNet whisper mode. |
 | **? / `/`** | Open the controls (help) window. |
@@ -108,8 +110,11 @@ the game is paused.
 - **Speech** — **NPC Say aloud (verbatim)**: when Transform is off and an NPC is the
   speaker, ON voices your exact line aloud (verbatim); OFF injects it as dialogue
   text/memory only (literal). Default ON. (Transform on always rephrases in their voice.)
-- **Options** — **Send to bed (while sleeping)** and **Sleep-talk murmuring** (with
-  interval/chance sliders).
+- **Options** — **Send to bed (while sleeping)**; **Collapse to floor (ragdoll)** with a
+  **Ragdoll the player too** sub-toggle; and **Sleep-talk murmuring** (with interval/chance
+  sliders). Bed wins when both bed + ragdoll are on; ragdoll is the fallback when no bed is
+  found. The ragdoll is a non-hostile, long-duration paralysis (won't aggro a follower),
+  released on wake.
 - **Status** — live Director state plus quick buttons: **Director** toggle, **Deep
   Sleep: Self**, **Sleep-talk: Self**.
 

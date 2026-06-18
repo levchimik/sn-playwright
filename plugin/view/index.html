@@ -115,7 +115,7 @@
     cursor:move;   /* drag handle for the whole panel (interactive children keep pointer) */
   }
   header .title{font-size:18px;letter-spacing:3px;font-weight:600;color:var(--accent);flex:1;}
-  .pillbar{flex-basis:100%;display:flex;align-items:center;gap:8px;}
+  .pillbar{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
   header .title small{display:block;font-size:10px;letter-spacing:1px;color:var(--muted);font-weight:400;}
   .pill{
     font-size:11px;padding:3px 9px;border-radius:10px;border:1px solid var(--line);
@@ -199,7 +199,7 @@
   .badge.asleep{background:rgba(127,168,214,0.18);color:var(--accent2);}
   .badge.sleeptalk{background:rgba(201,161,74,0.18);color:var(--accent);}
   .badge.xhair{background:rgba(255,255,255,0.14);color:var(--fg);}
-  /* Speaker/target pairing badges (Enter assigns: 1st = speaker, 2nd = target). */
+  /* Speaker/target pairing badges (Enter assigns: 1st = target, 2nd = speaker; you speak by default). */
   .badge.spkr{background:rgba(201,161,74,0.22);color:var(--accent);font-weight:600;}
   .badge.tgt{background:rgba(127,168,214,0.22);color:var(--accent2);font-weight:600;}
   .badge.pinned{background:rgba(230,145,60,0.22);color:#e89a55;}      /* SkyrimNet pinned */
@@ -239,6 +239,8 @@
       <div id="dirPill" class="pill" onclick="toggleDirector()">Director: off</div>
       <div id="whisperPill" class="pill" onclick="toggleWhisper()" title="Mirrors SkyrimNet's whisper mode: narrows the interaction range (who hears / is in the scene) from the normal radius to the whisper radius. Reflects SkyrimNet's real state, even if you toggled it with SkyrimNet's own hotkey.">Whisper: off</div>
       <div id="pausePill" class="pill" onclick="togglePause()">Pause: off</div>
+      <div id="interruptPill" class="pill" onclick="interruptDialogue()" title="Cut off all in-progress NPC speech and pending generation right now (mirrors SkyrimNet's interrupt-dialogue hotkey). Hotkey: -">Interrupt</div>
+      <div id="contPill" class="pill" onclick="toggleContinuous()" title="Toggle SkyrimNet continuous (autonomous-scene) mode — NPCs keep talking on their own after you interact. Requires GameMaster to be enabled in SkyrimNet to actually run. Hotkey: ,">Auto: off</div>
       <div id="logPill" class="pill" onclick="toggleLog()">Log</div>
     </div>
   </header>
@@ -251,7 +253,7 @@
   <footer>
     <textarea id="text" placeholder="Line / thought / scene event&hellip;"></textarea>
     <div class="target-line">
-      <span>Speaker: <b id="speakerName">none</b> &middot; Target: <b id="targetName">none</b></span>
+      <span>Speaker: <b id="speakerName">You</b> &middot; Target: <b id="targetName">none</b></span>
       <div id="xformPill" class="pill" onclick="toggleTransform()" title="On: the LLM rephrases your text in-character (voiced/generated). Off: used literally / verbatim.">Transform: off</div>
     </div>
     <div class="actions">
@@ -283,7 +285,7 @@
     <div class="kgrp">Nearby cast</div>
     <div class="krow"><span class="k"><span class="kkey">&uarr;</span><span class="kkey">&darr;</span></span><span class="kd">Move the cursor through the cast</span></div>
     <div class="krow"><span class="k"><span class="kkey">&larr;</span></span><span class="kd">Move the cursor to you (the player)</span></div>
-    <div class="krow"><span class="k"><span class="kkey">Enter</span></span><span class="kd">Assign the cursor NPC &mdash; 1st press = <b>speaker</b>, 2nd = <b>target</b> (again clears)</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Enter</span></span><span class="kd">Assign the cursor NPC &mdash; 1st press = <b>target</b>, 2nd = <b>speaker</b> (again clears). You speak by default.</span></div>
     <div class="krow"><span class="k"><span class="kkey">Tab</span></span><span class="kd">Open the action menu on the cursor NPC</span></div>
     <div class="krow"><span class="k"><span class="kkey">Del</span></span><span class="kd">Clear the speaker / target pairing</span></div>
 
@@ -302,6 +304,8 @@
     <div class="kgrp">General</div>
     <div class="krow"><span class="k"><span class="kkey">Esc</span></span><span class="kd">Cancel an edit / leave the box, then close the panel</span></div>
     <div class="krow"><span class="k"><span class="kkey">RMB</span></span><span class="kd">Hold to look / reposition without closing</span></div>
+    <div class="krow"><span class="k"><span class="kkey">-</span></span><span class="kd">Interrupt &mdash; cut off in-progress NPC dialogue</span></div>
+    <div class="krow"><span class="k"><span class="kkey">,</span></span><span class="kd">Toggle continuous (autonomous-scene) mode &mdash; needs GameMaster on</span></div>
     <div class="krow"><span class="k"><span class="kkey">=</span></span><span class="kd">Pause / unpause the game</span></div>
     <div class="krow"><span class="k"><span class="kkey">.</span></span><span class="kd">Toggle SkyrimNet whisper mode</span></div>
     <div class="krow"><span class="k"><span class="kkey">?</span> <span class="kkey">/</span></span><span class="kd">Open / close this controls window</span></div>
@@ -426,6 +430,12 @@
     if(!events){ list.innerHTML='<div class="empty">No log data (is SkyrimNet running?).</div>'; _logSig=null; return; }
     if(!events.length){ list.innerHTML='<div class="empty">No events yet.</div>'; _logSig=null; return; }
     events = events.slice().reverse();   // API returns newest-first; show oldest->newest
+    // Telepathy: hide OTHER NPCs' thoughts (npc_thoughts) unless the player owns a SkyrimNet
+    // Telepathy perk. The player's own thoughts (player_thoughts) always show.
+    if(!state.telepathy){
+      events = events.filter(function(e){ return (e.type||e.eventType||"").toLowerCase().indexOf("npc_thought") < 0; });
+      if(!events.length){ list.innerHTML='<div class="empty">No events yet.</div>'; _logSig=null; return; }
+    }
     // Skip the rebuild when nothing changed (the live poll fires every couple seconds) so we
     // don't churn the DOM, yank scroll, or fight an open editor. id + text-length catches new,
     // deleted, and edited messages.
@@ -709,11 +719,11 @@
     document.getElementById("dot").classList.toggle("on", (v==="1"||v===1||v===true));
   };
 
-  var state = { npcs:[], speaker:null, speakerName:"none", target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false };
+  var state = { npcs:[], speaker:null, speakerName:"You", target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false, continuous:false, telepathy:true };
   try{ state.transform = localStorage.getItem("pwTransform")==="1"; }catch(e){}
   // Restore the speaker/target pairing across panel close/reopen (persisted in localStorage).
   try{ var _p=JSON.parse(localStorage.getItem("pwPair")||"null");
-    if(_p){ state.speaker=_p.s||null; state.speakerName=_p.sn||"none"; state.target=_p.t||null; state.targetName=_p.tn||"none"; } }catch(e){}
+    if(_p){ state.speaker=_p.s||null; state.speakerName=state.speaker?(_p.sn||"none"):"You"; state.target=_p.t||null; state.targetName=_p.tn||"none"; } }catch(e){}
 
   // Keyboard navigation state. col = which column the arrows walk ("npc" | "log"); npc =
   // the cast CURSOR row index (separate from speaker/target — Enter on the cursor assigns
@@ -754,9 +764,20 @@
       state.director = !!d.directorMode;
       state.pause = !!d.pauseGame;
       state.whisper = !!d.whisper;
+      state.telepathy = ("telepathy" in d) ? !!d.telepathy : true;  // player owns a SkyrimNet Telepathy perk -> log shows NPC thoughts
       state.radius = d.radius;   // meters; for the pill tooltip / label
-      // Speaker/target are sticky (persist even if the actor steps out of range), so we do
-      // NOT drop them here. Keep the cursor index in range though.
+      // Drop a selected speaker/target once they leave the nearby cast (walked off / unloaded).
+      // The player ("player") is always present in the list, so it never clears.
+      var _ids = {}; npcs.forEach(function(n){ _ids[n.id] = 1; });
+      var _pairChanged = false;
+      if(state.speaker && state.speaker !== "player" && !_ids[state.speaker]){
+        state.speaker = null; state.speakerName = "You"; _pairChanged = true;
+      }
+      if(state.target && state.target !== "player" && !_ids[state.target]){
+        state.target = null; state.targetName = "none"; _pairChanged = true;
+      }
+      if(_pairChanged) savePairing();
+      // Keep the cursor index in range.
       if(nav.npc >= npcs.length) nav.npc = npcs.length - 1;
       if(sig === state._sig) return;   // nothing changed (incl. distance) -> skip
       // don't yank an open ⋯ menu out from under the user mid-interaction; refresh once it closes
@@ -781,6 +802,10 @@
     pp.textContent = "Pause: " + (state.pause ? "on" : "off");
     pp.className = "pill" + (state.pause ? " on" : "");
 
+    var cp = document.getElementById("contPill");
+    cp.textContent = "Auto: " + (state.continuous ? "on" : "off");
+    cp.className = "pill" + (state.continuous ? " on" : "");
+
     var wp = document.getElementById("whisperPill");
     wp.textContent = "Whisper: " + (state.whisper ? "on" : "off");
     wp.className = "pill" + (state.whisper ? " on" : "");
@@ -802,7 +827,7 @@
         if(n.pinned) badge += ' <span class="badge pinned">pinned</span>';
         if(n.follower) badge += ' <span class="badge follower">follower</span>';
         if(n.crosshair) badge += ' <span class="badge xhair">crosshair</span>';
-        if(state.speaker===n.id) badge += ' <span class="badge spkr">speaker</span>';
+        if(state.speaker===n.id || (!state.speaker && n.player)) badge += ' <span class="badge spkr">speaker</span>'; // player is the default speaker
         if(state.target===n.id)  badge += ' <span class="badge tgt">target</span>';
         var dist = (n.dist!=null && !n.player) ? '<span class="dist">'+n.dist+'m</span>' : '';
         var head = document.createElement("div");
@@ -868,17 +893,20 @@
   // chosen NPC: 1st pick = speaker, 2nd = target; picking one already in a slot clears
   // it; with both set, a new pick replaces the target. Say uses speaker -> target; other
   // actions just use whichever is the "primary" (speaker, else target). Persisted.
+  // Target first, speaker second. The PLAYER is the speaker by default, so the common case
+  // (you say something to an NPC) needs just one pick (the target). A 2nd pick on a different
+  // row sets an explicit speaker; deselecting the speaker reverts to the player default.
   function toggleActorSelection(n){
     if(!n) return;
-    if(state.speaker===n.id){ state.speaker=null; state.speakerName="none"; }
-    else if(state.target===n.id){ state.target=null; state.targetName="none"; }
-    else if(!state.speaker){ state.speaker=n.id; state.speakerName=n.name; }
-    else { state.target=n.id; state.targetName=n.name; }
+    if(state.speaker===n.id){ state.speaker=null; state.speakerName="You"; }      // deselect speaker -> player default
+    else if(state.target===n.id){ state.target=null; state.targetName="none"; }   // deselect target
+    else if(!state.target){ state.target=n.id; state.targetName=n.name; }          // 1st pick -> target
+    else { state.speaker=n.id; state.speakerName=n.name; }                          // 2nd pick -> explicit speaker
     savePairing();
     render();
   }
   function clearPairing(){
-    state.speaker=null; state.speakerName="none";
+    state.speaker=null; state.speakerName="You";
     state.target=null;  state.targetName="none";
     savePairing();
     render();
@@ -936,6 +964,22 @@
     state.pause = !state.pause;          // optimistic; next push confirms
     render();
     window.pwConfig("pause|" + (state.pause ? "1" : "0"));
+  }
+
+  // One-shot: cut off all in-progress NPC speech + pending generation. Not a state
+  // toggle, so just flash the pill for feedback (the audible stop is the real confirm).
+  function interruptDialogue(){
+    send("interrupt||");
+    var p = document.getElementById("interruptPill");
+    if(p){ p.classList.add("on"); setTimeout(function(){ p.classList.remove("on"); }, 220); }
+  }
+
+  // Continuous (autonomous-scene) mode is a SkyrimNet global. Fire its toggle and flip
+  // optimistically; SkyrimNet only acts on it when GameMaster is enabled.
+  function toggleContinuous(){
+    send("continuous||");
+    state.continuous = !state.continuous;
+    render();
   }
 
   function closePanel(){ window.pwClose(""); }
@@ -1145,6 +1189,8 @@
       case "3": presetAction("narrate"); return;
       case "4": presetAction("system");  return;
       case "0": toggleTransform(); return;   // toggle only — no focus
+      case "-": interruptDialogue(); return; // '-' key cuts off in-progress NPC dialogue
+      case ",": toggleContinuous(); return;  // ',' key toggles continuous (autonomous) mode
       case "=": togglePause();   return;     // '=' key pauses/unpauses the game
       case ".": toggleWhisper(); return;     // '.' key toggles SkyrimNet whisper mode
       case "/": toggleHelp();    return;     // ? / key opens the controls window
@@ -1166,7 +1212,15 @@
     // punctuation don't).
     if(e.key && e.key.length===1 && e.key.toLowerCase()!==e.key.toUpperCase() && !e.ctrlKey && !e.metaKey && !e.altKey){
       textBox.focus();
+      return;
     }
+    // Every other key here is DLL-driven (forwarded via pwKey): Tab, ↑↓←→, Enter, Delete,
+    // digits, symbols. CEF still delivers their native keydown to the focused #kc catcher, and
+    // its browser default would act on them — critically, Tab MOVES FOCUS into the compose box,
+    // which silently flips typing mode on (g_typing). That gates off the DLL's nav-key forwarding
+    // (HandleNavKeys runs only while NOT typing), so ↑↓←→ stop navigating. Suppress the default
+    // so #kc keeps focus and pwKey stays in charge. (#kc is an <input>, hence Tab's focus-move.)
+    e.preventDefault();
   });
 
   // Escape is driven by the DLL (the game doesn't deliver Escape to PrismaUI
