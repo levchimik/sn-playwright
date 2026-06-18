@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fomod>
+    <Name>Playwright</Name>
+    <Author>levchimik</Author>
+    <Version>0.7</Version>
+    <Website>https://github.com/levchimik/sn-playwright</Website>
+    <Description>A scene-control / NPC-puppeteering toolkit for SkyrimNet. Direct who is "in" a scene, narrate it, and put words, thoughts, and sleep into your cast from an on-screen, fully keyboard-drivable PrismaUI control panel.
+
+Requires: SKSE64, Address Library for SKSE Plugins, SkyUI (for the MCM), PrismaUI, SkyrimNet, SeverActions (SkyrimNet Action Pack), and PapyrusUtil SE. Load AFTER SkyrimNet.</Description>
+    <Groups>
+        <element>Gameplay</element>
+        <element>Companions</element>
+    </Groups>
+</fomod>
