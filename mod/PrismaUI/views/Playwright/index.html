@@ -199,7 +199,7 @@
   .badge.asleep{background:rgba(127,168,214,0.18);color:var(--accent2);}
   .badge.sleeptalk{background:rgba(201,161,74,0.18);color:var(--accent);}
   .badge.xhair{background:rgba(255,255,255,0.14);color:var(--fg);}
-  /* Speaker/target pairing badges (Enter assigns: 1st = target, 2nd = speaker; you speak by default). */
+  /* As/To pairing badges (click / Enter sets As; Ctrl+click / Ctrl+Enter sets To; As defaults to You). */
   .badge.spkr{background:rgba(201,161,74,0.22);color:var(--accent);font-weight:600;}
   .badge.tgt{background:rgba(127,168,214,0.22);color:var(--accent2);font-weight:600;}
   .badge.pinned{background:rgba(230,145,60,0.22);color:#e89a55;}      /* SkyrimNet pinned */
@@ -247,7 +247,6 @@
 
   <div id="dirBanner" class="dir-banner"><span class="dot"></span>Director Mode &mdash; you've left the scene</div>
 
-  <div class="section-label">Nearby cast &mdash; &crarr; sets speaker, &crarr; again sets target</div>
   <div id="npcs"><div class="empty">Loading nearby people&hellip;</div></div>
 
   <footer>
@@ -512,7 +511,10 @@
       fit();
       ta.focus();
       try{ if(selectAll) ta.select(); else ta.setSelectionRange(ta.value.length, ta.value.length); }catch(_){}
-      function close(){ window.pwConfig("typing|0"); ed.remove(); txEl.style.display=""; la.style.display=""; focusKc(); }
+      // "typingEnd" (not "typing|0"): the field is being removed, so this is a definitive
+      // end-of-typing, not a blur the DLL might refocus. It bypasses the DLL's 500ms echo
+      // guard so a quick edit+Enter can't leave typing-pause stuck (game paused, nav dead).
+      function close(){ window.pwConfig("typingEnd|1"); ed.remove(); txEl.style.display=""; la.style.display=""; focusKc(); }
       ed._pwCancel = close;   // let the DLL's Escape (routed via pwBlurText) cancel this edit
       function commit(){
         var nv=ta.value;

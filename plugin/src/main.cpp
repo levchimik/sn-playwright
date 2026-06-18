@@ -45,6 +45,8 @@ namespace
     RE::Setting*      g_alwaysRun = nullptr; // "bAlwaysRunByDefault:Controls" (cached) -- read for run/walk resync
     bool              g_appliedPause = false; // pause value currently in effect on the live view
     uint64_t          g_reapplyTick = 0;      // when we last ran an Unfocus->Focus cycle (loop guard)
+    std::atomic<int>  g_pendingTypingEchoes{0}; // exact # of self-inflicted typing focus/blur echoes
+                                                // still expected from the current Unfocus->Focus cycle
 
     bool EffectivePause() { return g_pauseGame || g_typing; }
 
@@ -897,6 +899,11 @@ namespace
             // self-inflicted echoes (else pausing thrashes).
             g_reapplyTick = GetTickCount64();
             g_appliedPause = EffectivePause();
+            // A cycle only fires JS focus/blur echoes when a text field is focused (g_typing):
+            // Unfocus blurs it (typing|0) and re-Focus refocuses it (typing|1). When #kc/body is
+            // focused (g_typing false) the cycle is silent. Tell OnJsConfig exactly how many echoes
+            // to swallow, so it never eats a genuine focus change that merely lands nearby in time.
+            g_pendingTypingEchoes.store(g_typing.load() ? 2 : 0);
             GuardedUnfocus();
             GuardedFocus(g_appliedPause);
         });
@@ -1389,14 +1396,34 @@ namespace
             // don't leak to other mods' hotkeys while composing a line.
             // Ignore the focus/blur echo from our own Unfocus->Focus cycle, or the
             // pause state would thrash (blur->unpause->focus->pause->...).
-            if (GetTickCount64() - g_reapplyTick < 500) {
+            // Swallow only the echoes our own Unfocus->Focus cycle produces -- counted exactly,
+            // not a blanket time window. The old window ate genuine focus changes that landed
+            // within 500ms (e.g. mashing Enter to re-open the log editor), wedging the typing
+            // state. The <500ms cap here is only a safety net: if an expected echo never arrives,
+            // the counter self-clears instead of swallowing real events forever.
+            if (g_pendingTypingEchoes.load() > 0 && (GetTickCount64() - g_reapplyTick < 500)) {
+                g_pendingTypingEchoes.fetch_sub(1);
                 return;
             }
+            g_pendingTypingEchoes.store(0);
             if (g_typing == on) {
                 return;
             }
             g_typing = on;
             ReapplyPause();
+        } else if (key == "typingEnd") {
+            // Definitive end-of-typing from the view: the editable field was removed
+            // (log-edit committed/cancelled), not merely blurred. Unlike "typing", this
+            // is never an echo of our own Unfocus->Focus cycle (the field is gone, so the
+            // re-Focus can't land on it and can't thrash), so it BYPASSES the 500ms echo
+            // guard. Without this, a quick edit + Enter -- committing within 500ms of the
+            // focus-driven reapply -- has its typing|0 swallowed, leaving g_typing stuck
+            // true: the game stays paused and the input hook stops forwarding nav keys.
+            g_pendingTypingEchoes.store(0);
+            if (g_typing) {
+                g_typing = false;
+                ReapplyPause();
+            }
         }
     }
 
