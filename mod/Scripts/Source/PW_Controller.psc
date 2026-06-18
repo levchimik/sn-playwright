@@ -516,6 +516,21 @@ Function ThinkLLM(Actor t, String hint)
     EndIf
 EndFunction
 
+; Player counterpart of ThinkTo, used when Think has no NPC selected — the parallel to
+; Say-to-room (player is the implicit subject). Injects the literal typed text as a
+; player_thoughts event, mirroring ThinkTo's JSON-with-required-fields pattern (player_name +
+; thoughts; a bare string would fail schema validation like npc_thoughts does). Transform mode
+; is ignored here: no SkyrimNet native turns a typed line into an LLM player thought
+; (TriggerPlayerThought is autonomous and takes no text), so the player thinks the literal words.
+Function ThinkPlayer(String thought)
+    Actor pl = Game.GetPlayer()
+    If thought != ""
+        String data = "{\"player_name\":\"" + SeverActionsNative.EscapeJsonString(pl.GetDisplayName()) + "\",\"thoughts\":\"" + SeverActionsNative.EscapeJsonString(thought) + "\"}"
+        SkyrimNetApi.RegisterEvent("player_thoughts", data, pl, None)
+        Debug.Notification("You think it")
+    EndIf
+EndFunction
+
 ; ------------------------------------------------------------------ transform (NPC line via LLM)
 ; Core (used by the PrismaUI panel). Hand the gist of what you want the NPC to say; the LLM
 ; turns it into a line in THAT NPC's voice and the NPC speaks it (the LLM counterpart of
@@ -608,6 +623,8 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
             Else
                 ThinkTo(primary, text)  ; literal verbatim thought
             EndIf
+        Else
+            ThinkPlayer(text)           ; no NPC selected (or you picked yourself) -> the player thinks it
         EndIf
     ElseIf action == "sleep"
         If t

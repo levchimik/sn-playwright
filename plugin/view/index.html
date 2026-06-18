@@ -257,8 +257,8 @@
       <div id="xformPill" class="pill" onclick="toggleTransform()" title="On: the LLM rephrases your text in-character (voiced/generated). Off: used literally / verbatim.">Transform: off</div>
     </div>
     <div class="actions">
-      <div class="actbtn" data-act="say"     data-need="target,text" data-suboff="verbatim" data-subon="LLM voice"  onclick="fire(this)">Say<small>verbatim</small></div>
-      <div class="actbtn" data-act="think"   data-need="target,text" data-suboff="literal"  data-subon="LLM"        onclick="fire(this)">Think<small>literal</small></div>
+      <div class="actbtn" data-act="say"     data-need="text"        data-suboff="verbatim" data-subon="LLM voice"  onclick="fire(this)">Say<small>verbatim</small></div>
+      <div class="actbtn" data-act="think"   data-need="text"        data-suboff="literal"  data-subon="LLM"        onclick="fire(this)">Think<small>literal</small></div>
       <div class="actbtn" data-act="narrate" data-need="text"        onclick="fire(this)">Narrate<small>reaction</small></div>
       <div class="actbtn" data-act="system"  data-need="text"        onclick="fire(this)">System<small>context</small></div>
     </div>
