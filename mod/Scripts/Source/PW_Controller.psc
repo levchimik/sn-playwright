@@ -522,12 +522,23 @@ EndFunction
 ; thoughts; a bare string would fail schema validation like npc_thoughts does). Transform mode
 ; is ignored here: no SkyrimNet native turns a typed line into an LLM player thought
 ; (TriggerPlayerThought is autonomous and takes no text), so the player thinks the literal words.
-Function ThinkPlayer(String thought)
+Function ThinkPlayer(String thought, Bool xform)
     Actor pl = Game.GetPlayer()
-    If thought != ""
+    If xform
+        ; Transform ON: SkyrimNet's own player-thought generation (the player parallel of
+        ; ThinkLLM/GenerateNPCThought), the way the SkyrimNet thought hotkey produces a thought.
+        ; NOTE: TriggerPlayerThought takes no text -- no exposed API seeds a player thought with a
+        ; typed gist -- so the composed line is NOT used here; the thought is generated from scene
+        ; context. (If we ever want the gist to drive it, that needs a SendCustomPromptToLLM round-trip.)
+        SkyrimNetApi.TriggerPlayerThought()
+        Debug.Notification("You think (LLM)")
+    ElseIf thought != ""
+        ; Transform OFF: your exact words logged as a player_thoughts event AND voiced aloud via
+        ; TriggerPlayerTTS (direct TTS -- no LLM, no extra event; the same voice path as player Say).
         String data = "{\"player_name\":\"" + SeverActionsNative.EscapeJsonString(pl.GetDisplayName()) + "\",\"thoughts\":\"" + SeverActionsNative.EscapeJsonString(thought) + "\"}"
         SkyrimNetApi.RegisterEvent("player_thoughts", data, pl, None)
-        Debug.Notification("You think it")
+        SkyrimNetApi.TriggerPlayerTTS(thought)
+        Debug.Notification("You think it (aloud)")
     EndIf
 EndFunction
 
@@ -624,7 +635,7 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
                 ThinkTo(primary, text)  ; literal verbatim thought
             EndIf
         Else
-            ThinkPlayer(text)           ; no NPC selected (or you picked yourself) -> the player thinks it
+            ThinkPlayer(text, xform)    ; no NPC selected (or you picked yourself) -> the player thinks it
         EndIf
     ElseIf action == "sleep"
         If t

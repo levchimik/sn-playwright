@@ -253,7 +253,7 @@
   <footer>
     <textarea id="text" placeholder="Line / thought / scene event&hellip;"></textarea>
     <div class="target-line">
-      <span>Speaker: <b id="speakerName">You</b> &middot; Target: <b id="targetName">none</b></span>
+      <span>As: <b id="speakerName">You</b> &middot; To: <b id="targetName">none</b></span>
       <div id="xformPill" class="pill" onclick="toggleTransform()" title="On: the LLM rephrases your text in-character (voiced/generated). Off: used literally / verbatim.">Transform: off</div>
     </div>
     <div class="actions">
@@ -285,9 +285,11 @@
     <div class="kgrp">Nearby cast</div>
     <div class="krow"><span class="k"><span class="kkey">&uarr;</span><span class="kkey">&darr;</span></span><span class="kd">Move the cursor through the cast</span></div>
     <div class="krow"><span class="k"><span class="kkey">&larr;</span></span><span class="kd">Move the cursor to you (the player)</span></div>
-    <div class="krow"><span class="k"><span class="kkey">Enter</span></span><span class="kd">Assign the cursor NPC &mdash; 1st press = <b>target</b>, 2nd = <b>speaker</b> (again clears). You speak by default.</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Enter</span></span><span class="kd">Set the cursor NPC as <b>As</b> (performer; again clears &rarr; You)</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Ctrl</span>+<span class="kkey">Enter</span></span><span class="kd">Set the cursor NPC as <b>To</b> (addressee)</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Click</span></span><span class="kd">Set as <b>As</b> &middot; <span class="kkey">Ctrl</span>+Click = <b>To</b>. As defaults to You; To defaults to none.</span></div>
     <div class="krow"><span class="k"><span class="kkey">Tab</span></span><span class="kd">Open the action menu on the cursor NPC</span></div>
-    <div class="krow"><span class="k"><span class="kkey">Del</span></span><span class="kd">Clear the speaker / target pairing</span></div>
+    <div class="krow"><span class="k"><span class="kkey">Del</span></span><span class="kd">Clear the As / To pairing</span></div>
 
     <div class="kgrp">Conversation log</div>
     <div class="krow"><span class="k"><span class="kkey">&rarr;</span></span><span class="kd">Jump to the log and select the latest message</span></div>
@@ -297,6 +299,7 @@
 
     <div class="kgrp">Compose &amp; act</div>
     <div class="krow"><span class="k"><span class="kkey">1</span><span class="kkey">2</span><span class="kkey">3</span><span class="kkey">4</span></span><span class="kd">Arm Say / Think / Narrate / System, then type</span></div>
+    <div class="krow"><span class="k"><span class="kkey">&larr;</span><span class="kkey">&rarr;</span></span><span class="kd">With an action armed: cycle Say/Think/Narrate/System</span></div>
     <div class="krow"><span class="k"><span class="kkey">0</span></span><span class="kd">Toggle Transform mode</span></div>
     <div class="krow"><span class="k"><span class="kkey">A&hellip;Z</span></span><span class="kd">Start writing in the message box</span></div>
     <div class="krow"><span class="k"><span class="kkey">Enter</span></span><span class="kd">Send (arms Say if nothing is armed) &middot; <span class="kkey">Shift</span>+<span class="kkey">Enter</span> = new line</span></div>
@@ -827,13 +830,13 @@
         if(n.pinned) badge += ' <span class="badge pinned">pinned</span>';
         if(n.follower) badge += ' <span class="badge follower">follower</span>';
         if(n.crosshair) badge += ' <span class="badge xhair">crosshair</span>';
-        if(state.speaker===n.id || (!state.speaker && n.player)) badge += ' <span class="badge spkr">speaker</span>'; // player is the default speaker
-        if(state.target===n.id)  badge += ' <span class="badge tgt">target</span>';
+        if(state.speaker===n.id || (!state.speaker && n.player)) badge += ' <span class="badge spkr">As</span>'; // player performs by default (As)
+        if(state.target===n.id)  badge += ' <span class="badge tgt">To</span>';
         var dist = (n.dist!=null && !n.player) ? '<span class="dist">'+n.dist+'m</span>' : '';
         var head = document.createElement("div");
         head.className = "npchead";
         head.innerHTML = '<span class="nm">'+esc(n.name)+dist+'</span>'+badge;
-        head.onclick = function(){ selectByClick(idx); };   // click cycles speaker -> target
+        head.onclick = function(e){ selectByClick(idx, e.ctrlKey); };   // click = As (performer); Ctrl+click = To (addressee). Ctrl, not Shift -- Shift+click extends the browser text selection.
         // "⋯" opens the per-character action menu (independent of the pairing;
         // stopPropagation so it doesn't also re-assign speaker/target).
         var menuBtn = document.createElement("div");
@@ -889,21 +892,24 @@
     if(["sleep","sleeptalk","wake"].indexOf(act)>=0) scheduleRefresh();
   }
 
-  // Speaker/target pairing. Enter (keyboard) and a row click both run this on the
-  // chosen NPC: 1st pick = speaker, 2nd = target; picking one already in a slot clears
-  // it; with both set, a new pick replaces the target. Say uses speaker -> target; other
-  // actions just use whichever is the "primary" (speaker, else target). Persisted.
-  // Target first, speaker second. The PLAYER is the speaker by default, so the common case
-  // (you say something to an NPC) needs just one pick (the target). A 2nd pick on a different
-  // row sets an explicit speaker; deselecting the speaker reverts to the player default.
-  function toggleActorSelection(n){
+  // Two slots: As (who PERFORMS the action -- the speaker; defaults to You) and To (who is
+  // ADDRESSED -- the target; only Say/System use it). Click / Enter sets As; Shift+click /
+  // Shift+Enter sets To. An actor holds at most one slot, so assigning it to one clears the
+  // other; re-selecting the same slot clears it (As -> You, To -> none). Persisted. Most actions
+  // act on the "primary" (As, else To); Say uses As -> To. So "think as Lydia" = click Lydia.
+  function setAs(n){
     if(!n) return;
-    if(state.speaker===n.id){ state.speaker=null; state.speakerName="You"; }      // deselect speaker -> player default
-    else if(state.target===n.id){ state.target=null; state.targetName="none"; }   // deselect target
-    else if(!state.target){ state.target=n.id; state.targetName=n.name; }          // 1st pick -> target
-    else { state.speaker=n.id; state.speakerName=n.name; }                          // 2nd pick -> explicit speaker
-    savePairing();
-    render();
+    if(state.speaker===n.id){ state.speaker=null; state.speakerName="You"; }        // toggle off -> player default
+    else { state.speaker=n.id; state.speakerName=n.name;
+           if(state.target===n.id){ state.target=null; state.targetName="none"; } } // was To -> moved to As
+    savePairing(); render();
+  }
+  function setTo(n){
+    if(!n) return;
+    if(state.target===n.id){ state.target=null; state.targetName="none"; }          // toggle off
+    else { state.target=n.id; state.targetName=n.name;
+           if(state.speaker===n.id){ state.speaker=null; state.speakerName="You"; } } // was As -> moved to To
+    savePairing(); render();
   }
   function clearPairing(){
     state.speaker=null; state.speakerName="You";
@@ -915,7 +921,7 @@
     try{ localStorage.setItem("pwPair", JSON.stringify({s:state.speaker,sn:state.speakerName,t:state.target,tn:state.targetName})); }catch(e){}
   }
   // Click moves the cursor to the row and assigns it (same as Enter).
-  function selectByClick(idx){ nav.col="npc"; nav.npc=idx; toggleActorSelection(state.npcs[idx]); }
+  function selectByClick(idx, toSlot){ nav.col="npc"; nav.npc=idx; if(toSlot){ setTo(state.npcs[idx]); } else { setAs(state.npcs[idx]); } }
 
   function refreshButtons(){
     var hasText = document.getElementById("text").value.trim().length>0;
@@ -1002,8 +1008,11 @@
     if(e.key==="Tab"){ e.preventDefault(); return; }   // keep focus in the box; don't tab focus away
     if(e.key==="Enter" && !e.shiftKey){
       e.preventDefault();
-      if(nav.act) fireAct(nav.act);
-      else presetAction("say");
+      if(nav.act){ fireAct(nav.act); }
+      // Nothing armed: arm Say and drop OUT of the box into action-pick mode, so Left/Right
+      // can cycle the action bar (say/think/narrate/system) and Enter sends. (Can't cycle while
+      // the box is focused — arrows would just move the text caret.)
+      else { presetAction("say"); textBox.blur(); focusKc(); }
     }
   });
   textBox.addEventListener("focus", function(){ window.pwConfig("typing|1"); });
@@ -1125,6 +1134,15 @@
     nav.act=null; clearActHighlight();
     return true;
   }
+  // Cycle the armed action across the ENABLED action buttons (Left/Right while composing).
+  function cycleAction(delta){
+    var acts = Array.prototype.slice.call(document.querySelectorAll(".actbtn"))
+                 .filter(function(b){ return !b.classList.contains("disabled"); })
+                 .map(function(b){ return b.getAttribute("data-act"); });
+    if(!acts.length) return;
+    var i = acts.indexOf(nav.act); if(i<0) i=0;
+    presetAction(acts[(i + delta + acts.length) % acts.length]);
+  }
 
   // Discrete navigation keys (↑ ↓ ← → Tab Delete Enter) are NOT handled here: with
   // PrismaUI feeding CEF from the same input list other mods' RegisterForKey hooks read,
@@ -1142,6 +1160,13 @@
       if(name==="ArrowUp"){   nav.menu=clamp(nav.menu-1,0,items.length-1); hlMenu(); return; }
       if(name==="Enter"||name==="Tab"){ if(items[nav.menu]) items[nav.menu].click(); return; }
       if(name==="ArrowLeft"){ closeCtxMenu(); focusKc(); return; }   // back out
+      return;
+    }
+
+    // While an action is armed (compose mode), Left/Right cycle the action bar instead of
+    // switching cast<->log columns; Up/Down still walk the list, Enter (below) sends.
+    if(nav.act && (name==="ArrowLeft" || name==="ArrowRight")){
+      cycleAction(name==="ArrowRight" ? 1 : -1);
       return;
     }
 
@@ -1175,13 +1200,16 @@
         } else { clearPairing(); }                         // cast: clear speaker/target badges
         return;
       case "Enter":
+        if(nav.act && fireAct(nav.act)){ return; }         // armed + sendable action -> send (takes precedence)
         if(nav.col==="log"){                               // edit the focused log message
           var erows=logRows();
           if(nav.log>=0 && nav.log<erows.length && erows[nav.log]._pwEdit){ erows[nav.log]._pwEdit(true); }
-        } else if(nav.col==="npc" && curNpcIdx()>=0){      // assign cursor NPC: speaker then target
-          toggleActorSelection(state.npcs[curNpcIdx()]);
-        } else if(nav.act){ fireAct(nav.act); }            // preselected action -> send
-        else { presetAction("say"); }                      // nothing armed -> arm Say
+        } else if(nav.col==="npc" && curNpcIdx()>=0){      // Enter = set As (the performer)
+          setAs(state.npcs[curNpcIdx()]);
+        } else if(!nav.act){ presetAction("say"); }        // nothing armed -> arm Say
+        return;
+      case "CtrlEnter":                                    // Ctrl+Enter = set To (the addressee)
+        if(nav.col==="npc" && curNpcIdx()>=0){ setTo(state.npcs[curNpcIdx()]); }
         return;
       // Number keys: arm an action (1-4) and drop into the box; 0 swaps Transform mode.
       case "1": presetAction("say");     return;

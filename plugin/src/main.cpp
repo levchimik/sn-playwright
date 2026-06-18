@@ -1184,6 +1184,14 @@ namespace
                         if (const char* nk = NavKeyName(be->GetIDCode())) {
                             if (be->IsDown()) {
                                 std::string name = nk;
+                                // Keyboard can't otherwise tell the view about modifiers: forward a
+                                // distinct "CtrlEnter" so the panel can map Enter = set As / Ctrl+Enter
+                                // = set To. (Ctrl, not Shift, to match the mouse gesture -- Shift+click
+                                // extends the browser text selection. GetAsyncKeyState reads live key
+                                // state regardless of whether we swallow the modifier from game input.)
+                                if (name == "Enter" && (GetAsyncKeyState(VK_CONTROL) & 0x8000)) {
+                                    name = "CtrlEnter";
+                                }
                                 SKSE::GetTaskInterface()->AddTask([name]() {
                                     if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
                                         g_prisma->InteropCall(g_view, "pwKey", name.c_str());
