@@ -13,7 +13,6 @@ Int  Property ModifierKey     = 42 Auto    ; DXScanCode held to arm the panel ke
 Bool Property RequireModifier = true Auto  ; if true, the panel key only fires while ModifierKey is held
 
 ; --- Options. ---
-Bool Property SendToBed = false Auto ; if true, EITHER sleep mode walks the NPC to the nearest bed (via SeverActions) to sleep there
 Bool Property NpcSayVerbatim = true Auto ; NPC Say w/ Transform OFF: false = literal (dialogue text/memory, not voiced), true = verbatim (voiced via narration). Default: verbatim.
 
 ; --- Sleep-talk murmuring (ambient dream-speech channel; does NOT route through the
@@ -38,96 +37,31 @@ Faction Function GetSleeptalkFaction()
     Return Game.GetFormFromFile(0x803, "SNPlaywright.esp") as Faction
 EndFunction
 
-; Format a FormID as a "0x"-prefixed 8-digit hex string. We hand the *placed* bed
-; reference's FormID to SeverActions; building the hex ourselves sidesteps the
-; signed-Int decimal ambiguity for FormIDs with a load-order index > 0x7F (e.g.
-; beds in mod-added inns/homes), which "id as String" would render as a negative
-; decimal that the native resolver may not parse as unsigned.
-String Function FormIDToHex(Int id)
-    String digits = "0123456789ABCDEF"
-    String out = ""
-    Int i = 0
-    While i < 8
-        out = StringUtil.GetNthChar(digits, Math.LogicalAnd(id, 15)) + out
-        id = Math.RightShift(id, 4)
-        i += 1
-    EndWhile
-    Return "0x" + out
-EndFunction
-
-; Route a sleeping NPC to the nearest bed using SeverActions' walk-to-furniture
-; system. Never the player. Needs SeverActions loaded. SeverActions' native
-; FindFurnitureByFormID resolves a base FormID to the nearest placed instance and
-; its sandbox package walks the actor there to use it (i.e. sleep).
-; Returns true if the actor was actually sent to a bed. Never the player; needs
-; SeverActions and a bed. When no bed is found the actor just sleeps where they stand.
-Bool Function SendActorToBed(Actor t)
-    If t == Game.GetPlayer()
-        Return false
-    EndIf
-    If Game.GetModByName("SeverActions.esp") == 255
-        Debug.Notification("Send to bed needs SeverActions installed")
-        Return false
-    EndIf
-    ObjectReference bed = FindNearestBed(t)
-    If !bed
-        Debug.Notification("No bed nearby for " + t.GetDisplayName())
-        Return false
-    EndIf
-    ; Pass the PLACED reference's FormID (as hex) so SeverActions resolves THIS exact
-    ; bed directly. Passing the base object's FormID instead forces a BaseID->RefID
-    ; fallback limited to 500u of the actor, which silently fails for any bed farther
-    ; than that and leaves the NPC standing while our notification still fires.
-    SeverActions_Furniture.UseFurniture_Global_Execute(t, FormIDToHex(bed.GetFormID()))
-    Debug.Notification(t.GetDisplayName() + " is heading to bed")
-    Return true
-EndFunction
-
-; Position a freshly-asleep actor. If "Send to bed" is on we walk them to the
-; nearest bed (never the player); otherwise they sleep where they stand. (A
-; ragdoll/paralysis fallback was tried but never held a HELD ragdoll in this load
-; order — see KNOWLEDGEBASE — so it was scrapped in favour of bed-only.)
-Function PlaceSleeper(Actor t)
-    If SendToBed
-        SendActorToBed(t)
-    EndIf
-EndFunction
-
-; Get a sent-to-bed NPC back up (no-op if they aren't using furniture).
-Function StopActorBed(Actor t)
-    If t == Game.GetPlayer() || Game.GetModByName("SeverActions.esp") == 255
+; Hold a deep-sleeping actor in place so the game's AI can't get them up or send them
+; wandering: SetUnconscious(true) turns the actor's AI fully off. They're unresponsive
+; anyway in deep sleep, so the AI-off is exactly what we want; SkyrimNet also treats
+; unconscious actors as out cold. (Per KNOWLEDGEBASE, SetUnconscious does NOT ragdoll —
+; they stay put, not collapse.) Never the player (freezing the player would strip control);
+; the player's "sleep" is just the deaf/state flag.
+; CAVEAT: an unconscious actor that isn't essential/protected dies in ONE hit, so only
+; deep-sleep NPCs where combat can't reach them.
+; NOTE: only DEEP sleep freezes. Sleep-talk gets no hold — rooting via SetDontMove was
+; tried and didn't keep the actor in bed (tested in-game), so it was dropped; a sleep-talker
+; keeps full AI so the murmur loop can still voice them.
+Function FreezeSleeper(Actor t)
+    If !t || t == Game.GetPlayer()
         Return
     EndIf
-    SeverActions_Furniture.StopUsingFurniture_Global_Execute(t)
+    t.SetUnconscious(true)
 EndFunction
 
-; Nearest usable bed in the actor's cell. Beds are detected by base-object name
-; containing "Bed" (covers "Bed", "Double Bed", "Bed Roll", etc.) — there is no
-; single universal bed keyword. Returns None if none found.
-ObjectReference Function FindNearestBed(Actor a)
-    Cell c = a.GetParentCell()
-    If !c
-        Return None
+; Release the unconscious hold — on wake, or when switching deep sleep -> sleep-talk (which
+; must clear it so the actor's AI comes back and they can murmur). Idempotent.
+Function UnfreezeSleeper(Actor t)
+    If !t || t == Game.GetPlayer()
+        Return
     EndIf
-    ObjectReference best = None
-    Float bestDist = 4096.0 ; doubles as the max search distance (~58m) — never send them on a cross-cell trek
-    Int n = c.GetNumRefs(40) ; 40 = kFurniture
-    Int i = 0
-    While i < n
-        ObjectReference r = c.GetNthRef(i, 40)
-        If r && r.Is3DLoaded() && !r.IsDisabled() && !r.IsFurnitureInUse()
-            Form base = r.GetBaseObject()
-            If base && StringUtil.Find(base.GetName(), "Bed") >= 0
-                Float d = a.GetDistance(r)
-                If d < bestDist
-                    bestDist = d
-                    best = r
-                EndIf
-            EndIf
-        EndIf
-        i += 1
-    EndWhile
-    Return best
+    t.SetUnconscious(false)
 EndFunction
 
 ; ------------------------------------------------------------------ lifecycle
@@ -260,7 +194,7 @@ Function ToggleAsleepActor(Actor t)
     If t.IsInFaction(slf)
         t.RemoveFromFaction(slf)
         EndDeaf(t)
-        StopActorBed(t)
+        UnfreezeSleeper(t)
         SkyrimNetApi.RegisterPersistentEvent(t.GetDisplayName() + " stirs and wakes up.", t, None)
         Debug.Notification(t.GetDisplayName() + " is awake")
     Else
@@ -279,11 +213,8 @@ Function ToggleAsleepActor(Actor t)
         ; informs without triggering a dialogue reaction, so it adds no new leak vector.
         SkyrimNetApi.RegisterPersistentEvent(t.GetDisplayName() + " has fallen into a deep, unresponsive sleep.", t, None)
         Debug.Notification(t.GetDisplayName() + " is in a deep sleep")
-        ; Position LAST so the walk-to-bed never delays the notification above. Only when
-        ; coming from awake; a deep<->talk switch keeps whatever bed state they already had.
-        If !wasTalk
-            PlaceSleeper(t)
-        EndIf
+        ; Freeze LAST. Deep sleep -> SetUnconscious (AI off so they can't get up).
+        FreezeSleeper(t)
     EndIf
 EndFunction
 
@@ -305,7 +236,7 @@ Function ToggleSleeptalkActor(Actor t)
     If t.IsInFaction(stf)
         t.RemoveFromFaction(stf)
         EndDeaf(t)
-        StopActorBed(t)
+        UnfreezeSleeper(t)
         SkyrimNetApi.RegisterPersistentEvent(t.GetDisplayName() + " stirs and wakes up.", t, None)
         Debug.Notification(t.GetDisplayName() + " is awake")
     Else
@@ -322,11 +253,9 @@ Function ToggleSleeptalkActor(Actor t)
         StartMurmurLoop()
         SkyrimNetApi.RegisterPersistentEvent(t.GetDisplayName() + " has drifted into a restless sleep, murmuring softly.", t, None)
         Debug.Notification(t.GetDisplayName() + " is now sleep-talking")
-        ; Position LAST so the walk-to-bed never delays the notification above. Only when
-        ; coming from awake; a deep<->talk switch keeps whatever bed state they already had.
-        If !wasDeep
-            PlaceSleeper(t)
-        EndIf
+        ; Sleep-talk has no hold (so the murmur loop's AI can run). Clear any SetUnconscious
+        ; left over from a deep-sleep -> sleep-talk switch.
+        UnfreezeSleeper(t)
     EndIf
 EndFunction
 
