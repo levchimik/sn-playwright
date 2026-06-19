@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://qconsulting.ca/fo3/ModConfig5.0.xsd">
     <moduleName>Playwright</moduleName>
+    <moduleImage path="fomod\playwright.jpg" showImage="true" showFade="true" height="-1"/>
     <installSteps order="Explicit">
         <installStep name="Playwright">
             <optionalFileGroups order="Explicit">
@@ -8,6 +9,7 @@
                     <plugins order="Explicit">
                         <plugin name="Playwright">
                             <description>The Playwright plugin (SNPlaywright.esp + SNPlaywright.dll), its SKSE ini, the PrismaUI control panel, the core action-menu config, and the compiled MCM + controller scripts. Required.</description>
+                            <image path="fomod\playwright.jpg"/>
                             <files>
                                 <file source="SNPlaywright.esp" destination="SNPlaywright.esp" priority="0"/>
                                 <folder source="PrismaUI" destination="PrismaUI" priority="0"/>
@@ -27,6 +29,7 @@
                     <plugins order="Explicit">
                         <plugin name="Full (prompt overrides + sleep actions)">
                             <description>Installs Playwright's SkyrimNet prompt overrides and the Deep Sleep / Sleep-talk panel buttons. Required for Deep Sleep, Sleep-talk dream-speech, keeping sleepers out of conversations, and the "forget what was said while asleep" memory window. NOTE: this REPLACES SkyrimNet's stock prompt files with gated copies (byte-identical to stock unless a Playwright state is active) -- re-run this installer (or re-sync) after a SkyrimNet update. Recommended.</description>
+                            <image path="fomod\playwright.jpg"/>
                             <files>
                                 <folder source="SKSE\Plugins\SkyrimNet\prompts" destination="SKSE\Plugins\SkyrimNet\prompts" priority="0"/>
                                 <file source="SKSE\Plugins\SNPlaywright\buttons\20_sleep.json" destination="SKSE\Plugins\SNPlaywright\buttons\20_sleep.json" priority="0"/>
@@ -37,6 +40,7 @@
                         </plugin>
                         <plugin name="Promptless (leave SkyrimNet's prompts untouched)">
                             <description>Does NOT touch SkyrimNet's prompt files and omits the Deep Sleep / Sleep-talk buttons. Say, Think, Narrate, System, Transform, Prompt and Director Mode all work normally. Choose this to avoid overwriting SkyrimNet's prompts -- e.g. on a newer SkyrimNet version, or alongside another mod that edits the same prompts. Trade-off: the sleep features and the asleep-memory window are unavailable.</description>
+                            <image path="fomod\playwright.jpg"/>
                             <files/>
                             <typeDescriptor>
                                 <type name="Optional"/>
@@ -48,6 +52,7 @@
                     <plugins order="Explicit">
                         <plugin name="Papyrus source scripts (for modders)">
                             <description>Install the .psc source for PW_Controller and PW_MCM under Scripts\Source. Players do not need this; it is only useful if you want to recompile or study the scripts.</description>
+                            <image path="fomod\playwright.jpg"/>
                             <files>
                                 <folder source="Scripts\Source" destination="Scripts\Source" priority="0"/>
                             </files>

@@ -1,4 +1,6 @@
-# Playwright — v0.7
+# Playwright — v0.8
+
+![Playwright — Direct the Scene](fomod/playwright.jpg)
 
 A scene-control / NPC-puppeteering toolkit for **SkyrimNet**. Direct who's "in" a
 scene, narrate it, and put words (and thoughts, and sleep) into your cast — like a
