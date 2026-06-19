@@ -1,0 +1,4 @@
+[
+  { "id": "sleep", "label": "Deep Sleep", "danger": true, "showWhen": "awake", "refresh": true },
+  { "id": "sleeptalk", "label": "Sleep-talk", "showWhen": "awake", "refresh": true }
+]

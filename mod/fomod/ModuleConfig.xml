@@ -7,16 +7,39 @@
                 <group name="Core (required)" type="SelectAll">
                     <plugins order="Explicit">
                         <plugin name="Playwright">
-                            <description>The Playwright plugin (SNPlaywright.esp + SNPlaywright.dll), its SKSE ini, the SkyrimNet prompt overrides that drive its sleep/telepathy/scene behaviour, the PrismaUI control panel, and the compiled MCM + controller scripts. Required.</description>
+                            <description>The Playwright plugin (SNPlaywright.esp + SNPlaywright.dll), its SKSE ini, the PrismaUI control panel, the core action-menu config, and the compiled MCM + controller scripts. Required.</description>
                             <files>
                                 <file source="SNPlaywright.esp" destination="SNPlaywright.esp" priority="0"/>
-                                <folder source="SKSE" destination="SKSE" priority="0"/>
                                 <folder source="PrismaUI" destination="PrismaUI" priority="0"/>
+                                <file source="SKSE\Plugins\SNPlaywright.dll" destination="SKSE\Plugins\SNPlaywright.dll" priority="0"/>
+                                <file source="SKSE\Plugins\SNPlaywright.ini" destination="SKSE\Plugins\SNPlaywright.ini" priority="0"/>
+                                <file source="SKSE\Plugins\SNPlaywright\buttons\10_core.json" destination="SKSE\Plugins\SNPlaywright\buttons\10_core.json" priority="0"/>
                                 <file source="Scripts\PW_Controller.pex" destination="Scripts\PW_Controller.pex" priority="0"/>
                                 <file source="Scripts\PW_MCM.pex" destination="Scripts\PW_MCM.pex" priority="0"/>
                             </files>
                             <typeDescriptor>
                                 <type name="Required"/>
+                            </typeDescriptor>
+                        </plugin>
+                    </plugins>
+                </group>
+                <group name="SkyrimNet behaviour" type="SelectExactlyOne">
+                    <plugins order="Explicit">
+                        <plugin name="Full (prompt overrides + sleep actions)">
+                            <description>Installs Playwright's SkyrimNet prompt overrides and the Deep Sleep / Sleep-talk panel buttons. Required for Deep Sleep, Sleep-talk dream-speech, keeping sleepers out of conversations, and the "forget what was said while asleep" memory window. NOTE: this REPLACES SkyrimNet's stock prompt files with gated copies (byte-identical to stock unless a Playwright state is active) -- re-run this installer (or re-sync) after a SkyrimNet update. Recommended.</description>
+                            <files>
+                                <folder source="SKSE\Plugins\SkyrimNet\prompts" destination="SKSE\Plugins\SkyrimNet\prompts" priority="0"/>
+                                <file source="SKSE\Plugins\SNPlaywright\buttons\20_sleep.json" destination="SKSE\Plugins\SNPlaywright\buttons\20_sleep.json" priority="0"/>
+                            </files>
+                            <typeDescriptor>
+                                <type name="Recommended"/>
+                            </typeDescriptor>
+                        </plugin>
+                        <plugin name="Promptless (leave SkyrimNet's prompts untouched)">
+                            <description>Does NOT touch SkyrimNet's prompt files and omits the Deep Sleep / Sleep-talk buttons. Say, Think, Narrate, System, Transform, Prompt and Director Mode all work normally. Choose this to avoid overwriting SkyrimNet's prompts -- e.g. on a newer SkyrimNet version, or alongside another mod that edits the same prompts. Trade-off: the sleep features and the asleep-memory window are unavailable.</description>
+                            <files/>
+                            <typeDescriptor>
+                                <type name="Optional"/>
                             </typeDescriptor>
                         </plugin>
                     </plugins>

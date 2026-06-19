@@ -7,6 +7,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -287,6 +289,63 @@ namespace
             }
         }
         logger::info("SkyrimNet API base: http://{}:{}", g_apiHost, g_apiPort);
+    }
+
+    // Build the per-NPC action-menu config the panel renders. Read every *.json fragment in
+    // Data/SKSE/Plugins/SNPlaywright/buttons/ (MO2/VFS-merged, so ANY mod can drop its own
+    // fragment there to add a button -- same extensibility pattern as SkyrimNet's prompt
+    // submodules) and concatenate them, in filename order, into one JSON array-of-arrays for
+    // the view to flatten. We deliberately do NOT parse the JSON here -- each fragment is a
+    // JSON array of button objects; a malformed one just makes the view fall back to its
+    // built-in default menu. Which fragments exist is how the FOMOD toggles the sleep buttons
+    // (Full ships 20_sleep.json; Promptless omits it). Returns "" when the folder is absent,
+    // so the view keeps its built-in default (sleep buttons included) on older installs.
+    std::string ReadMenuFragments()
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path dir = "Data\\SKSE\\Plugins\\SNPlaywright\\buttons";
+        if (!fs::is_directory(dir, ec)) {
+            return "";
+        }
+        std::vector<fs::path> files;
+        for (const auto& entry : fs::directory_iterator(dir, ec)) {
+            if (!entry.is_regular_file(ec)) {
+                continue;
+            }
+            std::string ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".json") {
+                files.push_back(entry.path());
+            }
+        }
+        if (files.empty()) {
+            return "";
+        }
+        std::sort(files.begin(), files.end());  // deterministic load order by filename
+
+        std::string out = "[";
+        bool first = true;
+        for (const auto& p : files) {
+            std::ifstream f(p, std::ios::binary);
+            if (!f) {
+                continue;
+            }
+            std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            const auto b = content.find_first_not_of(" \t\r\n");
+            if (b == std::string::npos) {
+                continue;  // blank file
+            }
+            const auto e = content.find_last_not_of(" \t\r\n");
+            content = content.substr(b, e - b + 1);
+            if (!first) {
+                out += ",";
+            }
+            out += content;  // each fragment is itself a JSON array -> array-of-arrays
+            first = false;
+        }
+        out += "]";
+        return first ? std::string{} : out;  // all-blank -> "" -> view keeps its default
     }
 
     // Blocking WinHTTP request (call off the main thread). Returns the response
@@ -1518,6 +1577,14 @@ namespace
             g_viewReady.store(true);
             g_prisma->InteropCall(a_view, "pwSetOpen", "0");
             g_prisma->InteropCall(a_view, "pwSetDirector", IsDirectorOn() ? "1" : "0");
+            // Push the data-driven per-NPC action menu (button fragments). Empty -> the view
+            // keeps its built-in default menu, so this never breaks an older/partial install.
+            {
+                const std::string menu = ReadMenuFragments();
+                if (!menu.empty()) {
+                    g_prisma->InteropCall(a_view, "pwSetMenu", menu.c_str());
+                }
+            }
             FetchConfigAsync();  // prime interaction radius + whisper state from SkyrimNet
             logger::info("Playwright JS listeners registered.");
         });

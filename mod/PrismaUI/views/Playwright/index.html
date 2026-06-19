@@ -854,24 +854,48 @@
     document.getElementById("targetName").textContent = state.targetName;
   }
 
-  // ---- per-character target-only action menu (Prompt + state-aware sleep) ----
+  // ---- per-character action menu: data-driven so the FOMOD (and other mods) can add or
+  //      remove buttons. The DLL reads every *.json fragment in
+  //      Data/SKSE/Plugins/SNPlaywright/buttons/ (MO2/VFS-merged, so any mod can drop one)
+  //      and pushes them here via pwSetMenu as an array-of-arrays we flatten. If nothing is
+  //      pushed (old install / read failed) we fall back to the built-in default below, which
+  //      includes the sleep buttons -- so existing setups keep working unchanged.
+  //   item: { id, label, labelSelf?, danger?, showWhen?("any"|"awake"|"asleep"), refresh? }
+  //   Firing sends "id|npcId|" as the PW_PrismaCommand payload; a 3rd-party script handles its
+  //   own id by also RegisterForModEvent("PW_PrismaCommand") and matching field 0 of strArg.
+  var PW_MENU_DEFAULT = [
+    { id:"prompt",    label:"Prompt", labelSelf:"Prompt (you)" },
+    { id:"sleep",     label:"Deep Sleep", danger:true, showWhen:"awake",  refresh:true },
+    { id:"sleeptalk", label:"Sleep-talk",               showWhen:"awake",  refresh:true },
+    { id:"wake",      label:"Wake",                       showWhen:"asleep", refresh:true }
+  ];
+  var pwMenu = PW_MENU_DEFAULT;
+  window.pwSetMenu = function(json){
+    try{
+      var arr = JSON.parse(json);
+      if(Array.isArray(arr)){
+        var flat = arr.reduce(function(a,b){ return a.concat(Array.isArray(b) ? b : [b]); }, []);
+        pwMenu = flat.length ? flat : PW_MENU_DEFAULT;
+      }
+    }catch(_){ pwMenu = PW_MENU_DEFAULT; }
+  };
+
   function openCtxMenu(n, anchorEl){
     var m = document.getElementById("ctxMenu");
     m.innerHTML = "";
-    function item(label, act, cls){
+    var asleep = (n.state==="asleep" || n.state==="sleeptalk");
+    pwMenu.forEach(function(cfg){
+      if(!cfg || !cfg.id) return;
+      var when = cfg.showWhen || "any";
+      if(when==="awake" && asleep) return;       // e.g. Deep Sleep / Sleep-talk: only while awake
+      if(when==="asleep" && !asleep) return;     // e.g. Wake: only while asleep
       var d = document.createElement("div");
-      d.className = "ctxitem" + (cls ? " "+cls : "");
-      d.textContent = label;
-      d.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); quickFire(act, n); };
+      d.className = "ctxitem" + (cfg.danger ? " danger" : "");
+      d.textContent = (n.player && cfg.labelSelf) ? cfg.labelSelf : (cfg.label || cfg.id);
+      var act = cfg.id, refresh = !!cfg.refresh;
+      d.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); quickFire(act, n, refresh); };
       m.appendChild(d);
-    }
-    item(n.player ? "Prompt (you)" : "Prompt", "prompt");
-    if(n.state==="asleep" || n.state==="sleeptalk"){
-      item("Wake", "wake");
-    } else {
-      item("Deep Sleep", "sleep", "danger");
-      item("Sleep-talk", "sleeptalk");
-    }
+    });
     // Anchor below the ⋯, clamped to the viewport.
     var r = anchorEl.getBoundingClientRect();
     m.classList.add("open");                       // show first so we can measure
@@ -888,10 +912,10 @@
     if(m.classList.contains("open") && !m.contains(e.target) && !(e.target.closest && e.target.closest(".npcmenu"))) closeCtxMenu();
   });
 
-  function quickFire(act, n){
+  function quickFire(act, n, refresh){
     send(act + "|" + n.id + "|");
-    // sleep/wake change badges -- re-pull after Papyrus runs
-    if(["sleep","sleeptalk","wake"].indexOf(act)>=0) scheduleRefresh();
+    // re-pull the cast after Papyrus runs if this action changes state/badges (sleep/wake).
+    if(refresh) scheduleRefresh();
   }
 
   // Two slots: As (who PERFORMS the action -- the speaker; defaults to You) and To (who is

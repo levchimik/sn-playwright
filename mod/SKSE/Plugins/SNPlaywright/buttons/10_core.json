@@ -1,0 +1,4 @@
+[
+  { "id": "prompt", "label": "Prompt", "labelSelf": "Prompt (you)" },
+  { "id": "wake", "label": "Wake", "showWhen": "asleep", "refresh": true }
+]
