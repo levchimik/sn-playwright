@@ -354,11 +354,14 @@ namespace
         return first ? std::string{} : out;  // all-blank -> "" -> view keeps its default
     }
 
-    // Auto-discover the faction roster: scan the raw fragment JSON for "faction:<formid>~<plugin>"
-    // tokens (inside showWhen strings) and resolve each to a live Faction. We scan text rather than
-    // parse JSON (no dependency); a token runs from just after "faction:" to the next ',' or '"'
-    // (the delimiters in a comma-separated showWhen string), which also tolerates spaces in plugin
-    // names. Catches "!faction:" too (the '!' precedes "faction:"). Called once at view-ready.
+    // Auto-discover the faction roster: scan the raw fragment JSON for "faction:<token>" tokens
+    // (inside showWhen strings) and resolve each to a live Faction. A token is either a
+    // "<formid>~<plugin>" pair (e.g. "0x1BDB1~Skyrim.esm" — always resolvable, no dependency) or a
+    // bare EditorID (e.g. "DarkBrotherhood" — resolved at runtime, needs EditorIDs to be retained).
+    // We scan text rather than parse JSON (no dependency); a token runs from just after "faction:"
+    // to the next ',' or '"' (the delimiters in a comma-separated showWhen string), which also
+    // tolerates spaces in plugin names. Catches "!faction:" too (the '!' precedes "faction:").
+    // Called once at view-ready.
     void BuildMenuFactions(const std::string& a_fragments)
     {
         g_menuFactions.clear();
@@ -393,18 +396,24 @@ namespace
             if (dup) {
                 continue;
             }
+            RE::TESFaction* fac = nullptr;
             const auto tilde = tok.find('~');
             if (tilde == std::string::npos) {
-                continue;
+                // Bare EditorID form, e.g. "PlayerFollowerFaction". Needs runtime EditorIDs to be
+                // retained (powerofthree's Tweaks "Load EditorIDs", or Native EditorID Fix);
+                // resolves to null (button stays hidden) when they aren't.
+                fac = RE::TESForm::LookupByEditorID<RE::TESFaction>(tok);
+            } else {
+                // FormID~Plugin form, e.g. "0x1BDB1~Skyrim.esm". Always available, no dependency.
+                RE::FormID localId = 0;
+                try {
+                    localId = static_cast<RE::FormID>(std::stoul(tok.substr(0, tilde), nullptr, 16));
+                } catch (...) {
+                    continue;
+                }
+                const std::string plugin = tok.substr(tilde + 1);
+                fac = dh->LookupForm<RE::TESFaction>(localId, plugin);
             }
-            RE::FormID localId = 0;
-            try {
-                localId = static_cast<RE::FormID>(std::stoul(tok.substr(0, tilde), nullptr, 16));
-            } catch (...) {
-                continue;
-            }
-            const std::string plugin = tok.substr(tilde + 1);
-            auto* fac = dh->LookupForm<RE::TESFaction>(localId, plugin);
             g_menuFactions.emplace_back(tok, fac);  // keep even if null so we log the miss once
             logger::info("Menu faction '{}' -> {}", tok, fac ? "resolved" : "NOT FOUND");
         }

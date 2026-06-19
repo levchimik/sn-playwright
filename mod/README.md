@@ -149,9 +149,9 @@ paused.
 ## Dependencies
 
 SkyrimNet, SKSE, **Prisma UI** (the panel framework — required: the panel is the only
-interface), PapyrusUtil (StorageUtil), and SeverActions (SkyrimNet Action Pack — used for
-its `EscapeJsonString` JSON helper for thought events). **UIExtensions is no longer
-required** as of v0.7 (the radial wheel was retired).
+interface), and PapyrusUtil (StorageUtil — deaf-window tracking). **UIExtensions is no
+longer required** as of v0.7 (the radial wheel was retired), and **SeverActions is no
+longer required** as of v0.8 (thought-event JSON is now escaped by an inline helper).
 
 ## Install
 

@@ -87,7 +87,7 @@ Function RegisterPrismaEvents()
 EndFunction
 
 ; SkyrimNet decorators are runtime registrations that don't survive a reload, so
-; (re)register them every load — same pattern SeverActions uses. These expose the
+; (re)register them every load. These expose the
 ; "deaf window" (game-seconds) so event_history.prompt can permanently drop events
 ; an actor couldn't perceive while asleep.
 Function RegisterDecorators()
@@ -127,7 +127,7 @@ Function RegisterKeys()
 EndFunction
 
 Event OnKeyDown(Int keyCode)
-    ; Optional modifier gate (SeverActions pattern): ignore the panel key unless the
+    ; Optional modifier gate: ignore the panel key unless the
     ; configured modifier is held. The panel toggle must fire even while the panel is
     ; OPEN (which puts the game in menu mode), so there is no menu-mode guard.
     If RequireModifier && ModifierKey > 0 && !Input.IsKeyPressed(ModifierKey)
@@ -421,15 +421,53 @@ String Function SayNarration(Actor talker, Actor listener, String line, String m
     Return talker.GetDisplayName() + " says, " + mode + ": \"" + line + "\""
 EndFunction
 
+; ------------------------------------------------------------------ JSON helper
+; Inline JSON string-escaper. Replaces SeverActions' EscapeJsonString native so Playwright
+; no longer depends on SeverActions. Walks the string by ordinal (the engine's string cache
+; is case-insensitive, but the escaped characters are all non-letters, so ordinals are
+; unambiguous) and escapes what would break a JSON string literal. Thought/name text is
+; short, so the per-char loop cost is negligible.
+String Function EscapeJson(String s)
+    Int len = StringUtil.GetLength(s)
+    If len <= 0
+        Return ""
+    EndIf
+    String out = ""
+    Int i = 0
+    While i < len
+        String c = StringUtil.GetNthChar(s, i)
+        Int o = StringUtil.AsOrd(c)
+        If o == 34          ; "   ->  \"
+            out += "\\\""
+        ElseIf o == 92      ; \   ->  \\
+            out += "\\\\"
+        ElseIf o == 10      ; LF  ->  \n
+            out += "\\n"
+        ElseIf o == 13      ; CR  ->  \r
+            out += "\\r"
+        ElseIf o == 9       ; TAB ->  \t
+            out += "\\t"
+        ElseIf o == 8       ; BS  ->  \b
+            out += "\\b"
+        ElseIf o == 12      ; FF  ->  \f
+            out += "\\f"
+        ElseIf o >= 32      ; printable -> copy as-is (other control chars < 32 are dropped)
+            out += c
+        EndIf
+        i += 1
+    EndWhile
+    Return out
+EndFunction
+
 ; ------------------------------------------------------------------ think (literal NPC thought)
 ; Inject a literal, persistent, unvoiced thought into an NPC, verbatim (no LLM). The
 ; npc_thoughts schema requires both `npc_name` and `thoughts`, so we hand the structured
 ; data to RegisterEvent as a JSON object in the content arg — a bare string only fills
-; `thoughts` and logs "Missing required field 'npc_name'". JSON is escaped via SeverActions'
-; native helper so quotes/backslashes in the thought are safe. Used by the PrismaUI panel.
+; `thoughts` and logs "Missing required field 'npc_name'". JSON is escaped via EscapeJson
+; (inline helper) so quotes/backslashes in the thought are safe. Used by the PrismaUI panel.
 Function ThinkTo(Actor t, String thought)
     If t && thought != ""
-        String data = "{\"npc_name\":\"" + SeverActionsNative.EscapeJsonString(t.GetDisplayName()) + "\",\"thoughts\":\"" + SeverActionsNative.EscapeJsonString(thought) + "\"}"
+        String data = "{\"npc_name\":\"" + EscapeJson(t.GetDisplayName()) + "\",\"thoughts\":\"" + EscapeJson(thought) + "\"}"
         SkyrimNetApi.RegisterEvent("npc_thoughts", data, t, None)
         Debug.Notification(t.GetDisplayName() + " thinks it")
     EndIf
@@ -464,7 +502,7 @@ Function ThinkPlayer(String thought, Bool xform)
     ElseIf thought != ""
         ; Transform OFF: your exact words logged as a player_thoughts event AND voiced aloud via
         ; TriggerPlayerTTS (direct TTS -- no LLM, no extra event; the same voice path as player Say).
-        String data = "{\"player_name\":\"" + SeverActionsNative.EscapeJsonString(pl.GetDisplayName()) + "\",\"thoughts\":\"" + SeverActionsNative.EscapeJsonString(thought) + "\"}"
+        String data = "{\"player_name\":\"" + EscapeJson(pl.GetDisplayName()) + "\",\"thoughts\":\"" + EscapeJson(thought) + "\"}"
         SkyrimNetApi.RegisterEvent("player_thoughts", data, pl, None)
         SkyrimNetApi.TriggerPlayerTTS(thought)
         Debug.Notification("You think it (aloud)")
