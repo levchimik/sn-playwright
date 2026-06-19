@@ -36,6 +36,12 @@ namespace
     RE::TESFaction* g_facAsleep = nullptr;     // PW_AsleepFaction    0x801 SNPlaywright.esp
     RE::TESFaction* g_facSleeptalk = nullptr;  // PW_SleeptalkFaction 0x803 SNPlaywright.esp
     RE::TESFaction* g_facBlacklist = nullptr;  // SkyrimNet ActorBlacklistFaction 0x12DB SkyrimNet.esp
+
+    // Factions referenced by "faction:<formid>~<plugin>" tokens in the installed button
+    // fragments, auto-discovered + resolved once at startup. Per-actor IsInFaction results
+    // are pushed to the view (npc.fx) so a button's showWhen can gate on them. Read-only
+    // after startup, so BuildNpcJson reads it on the main thread without locking.
+    std::vector<std::pair<std::string, RE::TESFaction*>> g_menuFactions;
     RE::BGSPerk*    g_perkTelepathy = nullptr;       // SkyrimNet_TelepathyPerk          0x12DD SkyrimNet.esp
     RE::BGSPerk*    g_perkTelepathyCanon = nullptr;  // SkyrimNet_TelepathyCanonicalPerk 0x12DE SkyrimNet.esp
 
@@ -348,6 +354,83 @@ namespace
         return first ? std::string{} : out;  // all-blank -> "" -> view keeps its default
     }
 
+    // Auto-discover the faction roster: scan the raw fragment JSON for "faction:<formid>~<plugin>"
+    // tokens (inside showWhen strings) and resolve each to a live Faction. We scan text rather than
+    // parse JSON (no dependency); a token runs from just after "faction:" to the next ',' or '"'
+    // (the delimiters in a comma-separated showWhen string), which also tolerates spaces in plugin
+    // names. Catches "!faction:" too (the '!' precedes "faction:"). Called once at view-ready.
+    void BuildMenuFactions(const std::string& a_fragments)
+    {
+        g_menuFactions.clear();
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        if (!dh || a_fragments.empty()) {
+            return;
+        }
+        const std::string key = "faction:";
+        std::size_t pos = 0;
+        while ((pos = a_fragments.find(key, pos)) != std::string::npos) {
+            const std::size_t start = pos + key.size();
+            const std::size_t stop = a_fragments.find_first_of(",\"", start);
+            pos = (stop == std::string::npos) ? a_fragments.size() : stop;
+            if (stop == std::string::npos) {
+                break;
+            }
+            std::string tok = a_fragments.substr(start, stop - start);
+            const auto b = tok.find_first_not_of(" \t");
+            const auto e = tok.find_last_not_of(" \t");
+            if (b == std::string::npos) {
+                continue;
+            }
+            tok = tok.substr(b, e - b + 1);
+            // dedupe
+            bool dup = false;
+            for (const auto& mf : g_menuFactions) {
+                if (mf.first == tok) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) {
+                continue;
+            }
+            const auto tilde = tok.find('~');
+            if (tilde == std::string::npos) {
+                continue;
+            }
+            RE::FormID localId = 0;
+            try {
+                localId = static_cast<RE::FormID>(std::stoul(tok.substr(0, tilde), nullptr, 16));
+            } catch (...) {
+                continue;
+            }
+            const std::string plugin = tok.substr(tilde + 1);
+            auto* fac = dh->LookupForm<RE::TESFaction>(localId, plugin);
+            g_menuFactions.emplace_back(tok, fac);  // keep even if null so we log the miss once
+            logger::info("Menu faction '{}' -> {}", tok, fac ? "resolved" : "NOT FOUND");
+        }
+    }
+
+    // JSON array of the menu-faction tokens this actor is currently in (for npc.fx). "[]" when
+    // no factions are tracked or the actor is in none.
+    std::string BuildFactionTags(RE::Actor* a_actor)
+    {
+        if (g_menuFactions.empty() || !a_actor) {
+            return "[]";
+        }
+        std::string out = "[";
+        bool first = true;
+        for (const auto& [tok, fac] : g_menuFactions) {
+            if (fac && a_actor->IsInFaction(fac)) {
+                out += first ? "\"" : ",\"";
+                out += JsonEsc(tok.c_str());
+                out += "\"";
+                first = false;
+            }
+        }
+        out += "]";
+        return out;
+    }
+
     // Blocking WinHTTP request (call off the main thread). Returns the response
     // body, or "" on failure.
     std::string HttpRequest(const wchar_t* a_verb, const std::string& a_path, const std::string& a_body)
@@ -443,6 +526,7 @@ namespace
         const char* state;  // "awake" | "asleep" | "sleeptalk"
         bool        follower = false;  // the player's teammate/follower
         bool        pinned = false;    // member of SkyrimNet's "Pinned" group
+        std::string factions = "[]";   // JSON array of matched "faction:..." showWhen tokens (npc.fx)
     };
 
     // Refresh SkyrimNet's "Pinned" NPC group (dashboard pins) into g_pinnedUuids. Two cheap localhost
@@ -607,6 +691,7 @@ namespace
                 float du = sa.distUnits;
                 bool follower = false;
                 bool pinned = false;
+                std::string fx = "[]";
                 for (const auto& pu : pinnedUuids) {
                     if (pu == sa.uuid) {
                         pinned = true;
@@ -621,6 +706,7 @@ namespace
                         st = "sleeptalk";
                     }
                     follower = a->IsPlayerTeammate();
+                    fx = BuildFactionTags(a);
                 }
                 char idbuf[16];
                 std::snprintf(idbuf, sizeof(idbuf), "0x%08X", sa.formID);
@@ -630,7 +716,8 @@ namespace
                     static_cast<int>(du / UNITS_PER_M + 0.5f),
                     st,
                     follower,
-                    pinned });
+                    pinned,
+                    fx });
             }
         } else if (auto* lists = RE::ProcessLists::GetSingleton()) {
             // FALLBACK (SkyrimNet web server unreachable): approximate locally.
@@ -665,7 +752,9 @@ namespace
                     idbuf,
                     static_cast<int>(du / UNITS_PER_M + 0.5f),
                     st,
-                    a->IsPlayerTeammate() });
+                    a->IsPlayerTeammate(),
+                    false,
+                    BuildFactionTags(a) });
             }
         }
 
@@ -705,7 +794,9 @@ namespace
             json += JsonEsc(pc->GetDisplayFullName());
             json += " (you)\",\"id\":\"player\",\"player\":true,\"state\":\"";
             json += pst;
-            json += "\"}";
+            json += "\",\"fx\":";
+            json += BuildFactionTags(pc);
+            json += "}";
         }
         for (const auto& e : entries) {
             json += ",{\"name\":\"";
@@ -720,6 +811,8 @@ namespace
             json += e.follower ? "true" : "false";
             json += ",\"pinned\":";
             json += e.pinned ? "true" : "false";
+            json += ",\"fx\":";
+            json += e.factions;
             json += "}";
         }
         json += "]}";
@@ -1579,8 +1672,11 @@ namespace
             g_prisma->InteropCall(a_view, "pwSetDirector", IsDirectorOn() ? "1" : "0");
             // Push the data-driven per-NPC action menu (button fragments). Empty -> the view
             // keeps its built-in default menu, so this never breaks an older/partial install.
+            // Also auto-discover the faction roster the fragments reference (for npc.fx /
+            // showWhen "faction:..."), from the same fragment text.
             {
                 const std::string menu = ReadMenuFragments();
+                BuildMenuFactions(menu);
                 if (!menu.empty()) {
                     g_prisma->InteropCall(a_view, "pwSetMenu", menu.c_str());
                 }

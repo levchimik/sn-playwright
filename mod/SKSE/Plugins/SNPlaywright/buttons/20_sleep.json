@@ -1,4 +1,4 @@
 [
-  { "id": "sleep", "label": "Deep Sleep", "danger": true, "showWhen": "awake", "refresh": true },
-  { "id": "sleeptalk", "label": "Sleep-talk", "showWhen": "awake", "refresh": true }
+  { "id": "sleep", "label": "Deep Sleep", "showWhen": "awake", "bg": "#7a2b2b66", "fg": "#e8a0a0" },
+  { "id": "sleeptalk", "label": "Sleep-talk", "showWhen": "awake" }
 ]

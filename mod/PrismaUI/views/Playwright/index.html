@@ -191,10 +191,12 @@
   .ctxmenu.open{display:flex;}
   body:not(.open) .ctxmenu{display:none;}  /* never show the action menu while the panel is collapsed */
   .ctxitem{font-size:12px;padding:8px 12px;border-radius:5px;cursor:pointer;color:var(--fg);white-space:nowrap;}
-  .ctxitem:hover{background:var(--bg2);color:var(--accent);}
-  .ctxitem.danger:hover{color:var(--danger);}
+  /* Hover + keyboard highlight. filter:brightness is added so items with an inline bg/fg color
+     (set by a button fragment) still get visible feedback -- inline styles override the var
+     background/color, but the brightness filter applies on top of whatever color they use. */
+  .ctxitem:hover{background:var(--bg2);color:var(--accent);filter:brightness(1.12);}
   /* Keyboard-highlighted action-menu item (Tab opens the menu on the first option). */
-  .ctxitem.ksel{background:var(--bg2);color:var(--accent);}
+  .ctxitem.ksel{background:var(--bg2);color:var(--accent);filter:brightness(1.18);}
   .badge{font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(255,255,255,0.08);color:var(--muted);}
   .badge.asleep{background:rgba(127,168,214,0.18);color:var(--accent2);}
   .badge.sleeptalk{background:rgba(201,161,74,0.18);color:var(--accent);}
@@ -860,14 +862,20 @@
   //      and pushes them here via pwSetMenu as an array-of-arrays we flatten. If nothing is
   //      pushed (old install / read failed) we fall back to the built-in default below, which
   //      includes the sleep buttons -- so existing setups keep working unchanged.
-  //   item: { id, label, labelSelf?, danger?, showWhen?("any"|"awake"|"asleep"), refresh? }
-  //   Firing sends "id|npcId|" as the PW_PrismaCommand payload; a 3rd-party script handles its
-  //   own id by also RegisterForModEvent("PW_PrismaCommand") and matching field 0 of strArg.
+  //   item: { id, label, labelSelf?, bg?, fg?, showWhen? }
+  //     id        action token; firing sends "id|npcId|" as the PW_PrismaCommand payload.
+  //     label     button text (labelSelf overrides it on the player's own row).
+  //     bg / fg   optional colors: bg = "#RRGGBB" or "#RRGGBBAA" (alpha), fg = text color.
+  //     showWhen  comma-separated AND-list of tokens; empty = always. Each token may be
+  //               negated with "!". Tokens: awake | asleep | sleeptalk | player | npc |
+  //               follower | pinned | faction:0xFORMID~Plugin.esp. (asleep = deep OR talk.)
+  //   A 3rd-party script handles its own id by also RegisterForModEvent("PW_PrismaCommand")
+  //   and matching field 0 of strArg. See buttons/README.md for the full guide.
   var PW_MENU_DEFAULT = [
     { id:"prompt",    label:"Prompt", labelSelf:"Prompt (you)" },
-    { id:"sleep",     label:"Deep Sleep", danger:true, showWhen:"awake",  refresh:true },
-    { id:"sleeptalk", label:"Sleep-talk",               showWhen:"awake",  refresh:true },
-    { id:"wake",      label:"Wake",                       showWhen:"asleep", refresh:true }
+    { id:"sleep",     label:"Deep Sleep", showWhen:"awake",  bg:"#7a2b2b66", fg:"#e8a0a0" },
+    { id:"sleeptalk", label:"Sleep-talk",  showWhen:"awake" },
+    { id:"wake",      label:"Wake",        showWhen:"asleep" }
   ];
   var pwMenu = PW_MENU_DEFAULT;
   window.pwSetMenu = function(json){
@@ -880,20 +888,51 @@
     }catch(_){ pwMenu = PW_MENU_DEFAULT; }
   };
 
+  // Evaluate one showWhen token against a cast member. Unknown positive tokens never match
+  // (fail-safe hide); negation flips that. Faction tokens check the per-actor list (n.fx) the
+  // DLL pushes for the factions referenced across all installed fragments.
+  function pwTok(n, t){
+    switch(t){
+      case "awake":     return n.state!=="asleep" && n.state!=="sleeptalk";
+      case "asleep":    return n.state==="asleep" || n.state==="sleeptalk";
+      case "sleeptalk": return n.state==="sleeptalk";
+      case "player":    return !!n.player;
+      case "npc":       return !n.player;
+      case "follower":  return !!n.follower;
+      case "pinned":    return !!n.pinned;
+    }
+    if(t.indexOf("faction:")===0){ return !!(n.fx && n.fx.indexOf(t.slice(8))>=0); }
+    return false;
+  }
+  // showWhen = comma-separated AND-list; "" = always show. A leading "!" negates a token.
+  function pwShow(cfg, n){
+    var cond = (cfg.showWhen||"").trim();
+    if(!cond) return true;
+    var toks = cond.split(",");
+    for(var i=0;i<toks.length;i++){
+      var t = toks[i].trim();
+      if(!t) continue;
+      var neg = (t.charAt(0)==="!");
+      if(neg) t = t.slice(1).trim();
+      var ok = pwTok(n, t);
+      if(neg) ok = !ok;
+      if(!ok) return false;
+    }
+    return true;
+  }
+
   function openCtxMenu(n, anchorEl){
     var m = document.getElementById("ctxMenu");
     m.innerHTML = "";
-    var asleep = (n.state==="asleep" || n.state==="sleeptalk");
     pwMenu.forEach(function(cfg){
-      if(!cfg || !cfg.id) return;
-      var when = cfg.showWhen || "any";
-      if(when==="awake" && asleep) return;       // e.g. Deep Sleep / Sleep-talk: only while awake
-      if(when==="asleep" && !asleep) return;     // e.g. Wake: only while asleep
+      if(!cfg || !cfg.id || !pwShow(cfg, n)) return;
       var d = document.createElement("div");
-      d.className = "ctxitem" + (cfg.danger ? " danger" : "");
+      d.className = "ctxitem";
       d.textContent = (n.player && cfg.labelSelf) ? cfg.labelSelf : (cfg.label || cfg.id);
-      var act = cfg.id, refresh = !!cfg.refresh;
-      d.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); quickFire(act, n, refresh); };
+      if(cfg.bg) d.style.background = cfg.bg;
+      if(cfg.fg) d.style.color = cfg.fg;
+      var act = cfg.id;
+      d.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); quickFire(act, n); };
       m.appendChild(d);
     });
     // Anchor below the ⋯, clamped to the viewport.
@@ -912,10 +951,11 @@
     if(m.classList.contains("open") && !m.contains(e.target) && !(e.target.closest && e.target.closest(".npcmenu"))) closeCtxMenu();
   });
 
-  function quickFire(act, n, refresh){
+  function quickFire(act, n){
     send(act + "|" + n.id + "|");
-    // re-pull the cast after Papyrus runs if this action changes state/badges (sleep/wake).
-    if(refresh) scheduleRefresh();
+    // Always re-pull the cast so any state/badge change shows -- and so the next menu open sees
+    // fresh state even while the game is paused (the 1s auto-poll is gated off while paused).
+    scheduleRefresh();
   }
 
   // Two slots: As (who PERFORMS the action -- the speaker; defaults to You) and To (who is
@@ -1256,7 +1296,11 @@
   document.addEventListener("keydown", function(e){
     if(!document.body.classList.contains("open")) return;
     if(e.key==="Escape") return;                                  // owned by the DLL
-    if(nav.menu>=0 && document.getElementById("ctxMenu").classList.contains("open")) return;  // menu has the keys
+    // Menu open: the DLL-forwarded pwKey owns these keys. preventDefault so CEF's native
+    // default doesn't ALSO fire -- notably Tab, whose focus-move would jump into the compose
+    // box (typing mode) the instant a menu item is fired with Tab. (This listener can run
+    // before pwKey closes the menu, so the guard must suppress the default, not just bail.)
+    if(nav.menu>=0 && document.getElementById("ctxMenu").classList.contains("open")){ e.preventDefault(); return; }
     var ae=document.activeElement;
     if(ae===textBox || (ae && ae.classList && ae.classList.contains("edta"))) return;  // already typing
     // Only an actual alphabet letter starts composing. CEF delivers every key's keydown to the
