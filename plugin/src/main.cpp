@@ -1327,6 +1327,8 @@ namespace
                 case 0x0D: return "=";   // '=' key -> pause/unpause
                 case 0x34: return ".";   // '.' key -> toggle whisper mode
                 case 0x35: return "/";   // ? / key -> open controls window
+                case 0x1A: return "[";   // '[' -> shrink panel text
+                case 0x1B: return "]";   // ']' -> enlarge panel text
                 default:   return nullptr;
             }
         }

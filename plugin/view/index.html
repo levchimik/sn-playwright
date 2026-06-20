@@ -15,6 +15,7 @@
     --accent2:#7fa8d6;
     --sel:rgba(201,161,74,0.18);
     --danger:#c75c5c;
+    --fs:1;                  /* text-only scale multiplier (A-/A+ or [ / ]) */
   }
   *{box-sizing:border-box;user-select:none;font-family:"Segoe UI",sans-serif;}
   /* Empty areas are click-through so the always-shown view never eats game input;
@@ -76,7 +77,7 @@
     opacity:0.6;border-bottom-right-radius:3px;}
   body.open.logopen #log{display:flex;}
   .loghead{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);cursor:move;}
-  .loghead .title{flex:1;font-size:15px;letter-spacing:2px;color:var(--accent2);font-weight:600;}
+  .loghead .title{flex:1;font-size:calc(15px*var(--fs));letter-spacing:2px;color:var(--accent2);font-weight:600;}
   #logList{flex:1;overflow-y:auto;padding:6px 10px;}
   #logList::-webkit-scrollbar{width:8px;}
   #logList::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:4px;}
@@ -89,16 +90,21 @@
   /* Header row: name+time pinned to the LEFT edge, actions to the RIGHT edge. */
   .logmsg .lh{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:4px;}
   .logmsg .meta{display:flex;align-items:baseline;gap:8px;min-width:0;}
-  .logmsg .sp{font-size:12px;font-weight:600;color:var(--fg);}
+  .logmsg .sp{font-size:calc(12px*var(--fs));font-weight:600;color:var(--fg);}
   .logmsg.lm-speech .sp{color:#e8d24a;}    /* actor speech  — yellow */
   .logmsg.lm-thought .sp{color:#b98fe6;}   /* actor thought — purple */
   .logmsg.lm-narrator .sp{color:#e0892f;}  /* narrator      — orange */
   .logmsg.lm-system .sp{color:var(--muted);font-style:italic;}
-  .logmsg .tm{font-size:11px;color:var(--muted);}
-  .logmsg .tx{font-size:13px;line-height:1.35;color:var(--fg);user-select:text;white-space:pre-wrap;}
+  .logmsg .tm{font-size:calc(11px*var(--fs));color:var(--muted);}
+  .logmsg .tx{font-size:calc(13px*var(--fs));line-height:1.35;color:var(--fg);user-select:text;white-space:pre-wrap;}
   .logmsg .la{display:flex;gap:6px;opacity:0;transition:opacity .1s;}
   .logmsg:hover .la{opacity:1;}
-  .logbtn{font-size:10px;padding:2px 8px;border-radius:5px;border:1px solid var(--line);color:var(--muted);cursor:pointer;background:transparent;}
+  .logbtn{font-size:calc(10px*var(--fs));padding:2px 8px;border-radius:5px;border:1px solid var(--line);color:var(--muted);cursor:pointer;background:transparent;}
+  /* Text-size control (A-/A+) in the controls window. */
+  .fsrow{display:flex;align-items:center;gap:8px;padding:4px 12px 10px;}
+  .fsbtn{cursor:pointer;font-size:calc(12px*var(--fs));min-width:30px;text-align:center;padding:3px 9px;border-radius:6px;border:1px solid var(--line);color:var(--fg);background:var(--bg2);font-weight:700;}
+  .fsbtn:hover{border-color:var(--accent);color:var(--accent);}
+  .fsval{font-size:calc(12px*var(--fs));color:var(--accent2);min-width:46px;text-align:center;font-weight:600;}
   .logbtn:hover{color:var(--accent);border-color:var(--accent);}
   .logbtn.del:hover{color:var(--danger);border-color:var(--danger);}
   /* Inline edit (replaces prompt()/confirm(), which CEF suppresses). */
@@ -106,7 +112,7 @@
   .logmsg .edta{display:block;width:100%;min-height:48px;max-height:40vh;overflow:auto;
     resize:vertical;background:var(--bg2);box-sizing:border-box;
     border:1px solid var(--accent);border-radius:6px;color:var(--fg);
-    font-size:13px;line-height:1.35;padding:6px 8px;user-select:text;}
+    font-size:calc(13px*var(--fs));line-height:1.35;padding:6px 8px;user-select:text;}
   .logmsg .edta:focus{outline:none;}
   .logmsg .edrow{display:flex;gap:6px;margin-top:5px;}
   header{
@@ -114,19 +120,19 @@
     padding:14px 16px;border-bottom:1px solid var(--line);
     cursor:move;   /* drag handle for the whole panel (interactive children keep pointer) */
   }
-  header .title{font-size:18px;letter-spacing:3px;font-weight:600;color:var(--accent);flex:1;}
+  header .title{font-size:calc(18px*var(--fs));letter-spacing:3px;font-weight:600;color:var(--accent);flex:1;}
   .pillbar{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
-  header .title small{display:block;font-size:10px;letter-spacing:1px;color:var(--muted);font-weight:400;}
+  header .title small{display:block;font-size:calc(10px*var(--fs));letter-spacing:1px;color:var(--muted);font-weight:400;}
   .pill{
-    font-size:11px;padding:3px 9px;border-radius:10px;border:1px solid var(--line);
+    font-size:calc(11px*var(--fs));padding:3px 9px;border-radius:10px;border:1px solid var(--line);
     color:var(--muted);cursor:pointer;white-space:nowrap;
   }
   .pill.on{color:#1a1a1a;background:var(--accent);border-color:var(--accent);font-weight:600;}
   /* Small square header buttons (+ pause, ? help) sitting next to the × close. */
-  .hbtn{cursor:pointer;color:var(--muted);font-size:15px;line-height:1;padding:2px 8px;border-radius:6px;border:1px solid var(--line);font-weight:700;}
+  .hbtn{cursor:pointer;color:var(--muted);font-size:calc(15px*var(--fs));line-height:1;padding:2px 8px;border-radius:6px;border:1px solid var(--line);font-weight:700;}
   .hbtn:hover{color:var(--accent);border-color:var(--accent);}
   .hbtn.on{color:#1a1a1a;background:var(--accent);border-color:var(--accent);}
-  .closebtn{cursor:pointer;color:var(--muted);font-size:18px;line-height:1;padding:2px 6px;}
+  .closebtn{cursor:pointer;color:var(--muted);font-size:calc(18px*var(--fs));line-height:1;padding:2px 6px;}
   .closebtn:hover{color:var(--fg);}
 
   /* Controls / help window (toggled by the ? header button). Floats over the panel; static
@@ -140,21 +146,21 @@
   }
   body.open.helpopen #controls{display:flex;}
   #controls .chead{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);cursor:move;}
-  #controls .chead .title{flex:1;font-size:14px;letter-spacing:2px;color:var(--accent);font-weight:600;}
+  #controls .chead .title{flex:1;font-size:calc(14px*var(--fs));letter-spacing:2px;color:var(--accent);font-weight:600;}
   #controls .cbody{overflow-y:auto;padding:6px 4px 10px;}
   #controls .cbody::-webkit-scrollbar{width:8px;}
   #controls .cbody::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:4px;}
-  .kgrp{padding:9px 12px 3px;font-size:10px;letter-spacing:1.5px;color:var(--accent2);text-transform:uppercase;}
+  .kgrp{padding:9px 12px 3px;font-size:calc(10px*var(--fs));letter-spacing:1.5px;color:var(--accent2);text-transform:uppercase;}
   .krow{display:flex;align-items:baseline;gap:10px;padding:3px 12px;}
   .krow .k{flex:0 0 104px;display:flex;gap:4px;flex-wrap:wrap;}
-  .kkey{display:inline-block;font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid var(--line);background:var(--bg2);color:var(--fg);white-space:nowrap;}
-  .krow .kd{flex:1;font-size:12px;color:var(--muted);line-height:1.35;}
+  .kkey{display:inline-block;font-size:calc(11px*var(--fs));padding:1px 6px;border-radius:4px;border:1px solid var(--line);background:var(--bg2);color:var(--fg);white-space:nowrap;}
+  .krow .kd{flex:1;font-size:calc(12px*var(--fs));color:var(--muted);line-height:1.35;}
 
   .dir-banner{
     display:none;
     align-items:center;gap:8px;
     background:linear-gradient(90deg,rgba(201,161,74,0.95),rgba(201,161,74,0.65));
-    color:#1a1a1a;font-weight:700;font-size:12px;letter-spacing:1.2px;
+    color:#1a1a1a;font-weight:700;font-size:calc(12px*var(--fs));letter-spacing:1.2px;
     padding:8px 16px;text-transform:uppercase;
   }
   .dir-banner .dot{width:8px;height:8px;border-radius:50%;background:#1a1a1a;
@@ -164,7 +170,7 @@
   #panel.director{border-left:4px solid var(--accent);box-shadow:4px 0 24px rgba(201,161,74,0.35);}
   #panel.director .title{color:var(--accent);}
 
-  .section-label{font-size:10px;letter-spacing:1.5px;color:var(--muted);padding:10px 16px 4px;text-transform:uppercase;}
+  .section-label{font-size:calc(10px*var(--fs));letter-spacing:1.5px;color:var(--muted);padding:10px 16px 4px;text-transform:uppercase;}
 
   #npcs{flex:1;overflow-y:auto;padding:0 8px;}
   #npcs::-webkit-scrollbar{width:8px;}
@@ -176,11 +182,11 @@
   .npc:hover{background:var(--bg2);}
   .npc.sel{background:var(--sel);border-color:var(--accent);}
   .npchead{display:flex;align-items:center;gap:10px;}
-  .npc .nm{flex:1;font-size:14px;}
-  .npc .nm .dist{color:var(--muted);font-size:11px;margin-left:6px;}
+  .npc .nm{flex:1;font-size:calc(14px*var(--fs));}
+  .npc .nm .dist{color:var(--muted);font-size:calc(11px*var(--fs));margin-left:6px;}
   .npc.you .nm{color:var(--accent2);}
   /* Per-row "⋯" trigger for the target-only action menu. */
-  .npcmenu{font-size:17px;line-height:1;color:var(--muted);cursor:pointer;padding:0 6px;border-radius:5px;}
+  .npcmenu{font-size:calc(17px*var(--fs));line-height:1;color:var(--muted);cursor:pointer;padding:0 6px;border-radius:5px;}
   .npcmenu:hover{color:var(--accent);background:var(--bg);}
   /* Floating context menu (Windows-style) for a character's target-only actions. */
   .ctxmenu{
@@ -190,14 +196,14 @@
   }
   .ctxmenu.open{display:flex;}
   body:not(.open) .ctxmenu{display:none;}  /* never show the action menu while the panel is collapsed */
-  .ctxitem{font-size:12px;padding:8px 12px;border-radius:5px;cursor:pointer;color:var(--fg);white-space:nowrap;}
+  .ctxitem{font-size:calc(12px*var(--fs));padding:8px 12px;border-radius:5px;cursor:pointer;color:var(--fg);white-space:nowrap;}
   /* Hover + keyboard highlight. filter:brightness is added so items with an inline bg/fg color
      (set by a button fragment) still get visible feedback -- inline styles override the var
      background/color, but the brightness filter applies on top of whatever color they use. */
   .ctxitem:hover{background:var(--bg2);color:var(--accent);filter:brightness(1.12);}
   /* Keyboard-highlighted action-menu item (Tab opens the menu on the first option). */
   .ctxitem.ksel{background:var(--bg2);color:var(--accent);filter:brightness(1.18);}
-  .badge{font-size:10px;padding:2px 7px;border-radius:8px;background:rgba(255,255,255,0.08);color:var(--muted);}
+  .badge{font-size:calc(10px*var(--fs));padding:2px 7px;border-radius:8px;background:rgba(255,255,255,0.08);color:var(--muted);}
   .badge.asleep{background:rgba(127,168,214,0.18);color:var(--accent2);}
   .badge.sleeptalk{background:rgba(201,161,74,0.18);color:var(--accent);}
   .badge.xhair{background:rgba(255,255,255,0.14);color:var(--fg);}
@@ -206,25 +212,25 @@
   .badge.tgt{background:rgba(127,168,214,0.22);color:var(--accent2);font-weight:600;}
   .badge.pinned{background:rgba(230,145,60,0.22);color:#e89a55;}      /* SkyrimNet pinned */
   .badge.follower{background:rgba(120,190,120,0.20);color:#86cf86;}   /* player's follower */
-  .empty{color:var(--muted);font-size:13px;text-align:center;padding:24px 12px;font-style:italic;}
+  .empty{color:var(--muted);font-size:calc(13px*var(--fs));text-align:center;padding:24px 12px;font-style:italic;}
 
   footer{border-top:1px solid var(--line);padding:12px 14px;}
   #text{
     width:100%;height:84px;resize:none;border-radius:8px;
     background:var(--bg2);border:1px solid var(--line);color:var(--fg);
-    padding:10px 12px;font-size:14px;line-height:1.4;user-select:text;
+    padding:10px 12px;font-size:calc(14px*var(--fs));line-height:1.4;user-select:text;
   }
   #text:focus{outline:none;border-color:var(--accent);}
-  .target-line{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted);margin:8px 2px 10px;}
+  .target-line{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:calc(12px*var(--fs));color:var(--muted);margin:8px 2px 10px;}
   .target-line b{color:var(--fg);}
   .actions{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;}
   .actbtn{
-    font-size:12px;padding:9px 4px;border-radius:7px;cursor:pointer;text-align:center;
+    font-size:calc(12px*var(--fs));padding:9px 4px;border-radius:7px;cursor:pointer;text-align:center;
     background:var(--bg2);border:1px solid var(--line);color:var(--fg);
   }
   .actbtn:hover:not(.disabled){border-color:var(--accent);color:var(--accent);}
   .actbtn.disabled{opacity:0.32;cursor:default;}
-  .actbtn small{display:block;font-size:9px;color:var(--muted);margin-top:2px;}
+  .actbtn small{display:block;font-size:calc(9px*var(--fs));color:var(--muted);margin-top:2px;}
   .actbtn.danger:hover:not(.disabled){border-color:var(--danger);color:var(--danger);}
   /* Keyboard-preselected action (1-4): armed so Enter fires it. */
   .actbtn.presel{border-color:var(--accent);color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);}
@@ -283,6 +289,14 @@
     <div class="closebtn" onclick="toggleHelp()">&#10005;</div>
   </div>
   <div class="cbody">
+    <div class="kgrp">Text size</div>
+    <div class="fsrow">
+      <span class="fsbtn" onclick="fontStep(-0.1)" title="Smaller">A&minus;</span>
+      <span id="fsLabel" class="fsval">100%</span>
+      <span class="fsbtn" onclick="fontStep(0.1)" title="Bigger">A+</span>
+      <span class="fsbtn fsreset" onclick="fontReset()" title="Reset to 100%">Reset</span>
+      <span class="kd" style="flex:1;text-align:right;">or <span class="kkey">[</span> <span class="kkey">]</span></span>
+    </div>
     <div class="kgrp">Nearby cast</div>
     <div class="krow"><span class="k"><span class="kkey">&uarr;</span><span class="kkey">&darr;</span></span><span class="kd">Move the cursor through the cast</span></div>
     <div class="krow"><span class="k"><span class="kkey">&larr;</span></span><span class="kd">Move the cursor to you (the player)</span></div>
@@ -728,6 +742,22 @@
 
   var state = { npcs:[], speaker:null, speakerName:"You", target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false, continuous:false, telepathy:true };
   try{ state.transform = localStorage.getItem("pwTransform")==="1"; }catch(e){}
+
+  // --- Text scale (font-only) -----------------------------------------------
+  // A cosmetic multiplier on every CSS font-size (the --fs var). Persisted in
+  // localStorage; nudged by the A-/A+ buttons in the controls window or [ / ].
+  // Layout (padding, panel width) is untouched — the panel itself is resizable.
+  var PW_FS_MIN=0.7, PW_FS_MAX=1.8, fontScale=1;
+  try{ var _fs=parseFloat(localStorage.getItem("pwFontScale")); if(_fs>0) fontScale=_fs; }catch(e){}
+  function applyFontScale(){
+    fontScale = Math.max(PW_FS_MIN, Math.min(PW_FS_MAX, fontScale));
+    document.documentElement.style.setProperty("--fs", fontScale.toFixed(2));
+    try{ localStorage.setItem("pwFontScale", fontScale.toFixed(2)); }catch(e){}
+    var lbl=document.getElementById("fsLabel"); if(lbl) lbl.textContent = Math.round(fontScale*100)+"%";
+  }
+  function fontStep(d){ fontScale += d; applyFontScale(); }
+  function fontReset(){ fontScale = 1; applyFontScale(); }
+  applyFontScale();
   // Restore the speaker/target pairing across panel close/reopen (persisted in localStorage).
   try{ var _p=JSON.parse(localStorage.getItem("pwPair")||"null");
     if(_p){ state.speaker=_p.s||null; state.speakerName=state.speaker?(_p.sn||"none"):"You"; state.target=_p.t||null; state.targetName=_p.tn||"none"; } }catch(e){}
@@ -1288,6 +1318,8 @@
       case "=": togglePause();   return;     // '=' key pauses/unpauses the game
       case ".": toggleWhisper(); return;     // '.' key toggles SkyrimNet whisper mode
       case "/": toggleHelp();    return;     // ? / key opens the controls window
+      case "[": fontStep(-0.1);  return;     // '[' shrinks the panel text
+      case "]": fontStep(0.1);   return;     // ']' enlarges the panel text
     }
   };
 
