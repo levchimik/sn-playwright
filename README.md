@@ -1,4 +1,4 @@
-# Playwright — v0.8
+# Playwright — v0.9
 
 ![Playwright — Direct the Scene](mod/fomod/playwright.jpg)
 
@@ -18,6 +18,10 @@ crosshair aiming, multi-word names just work.
 > **v0.7** retires the old UIExtensions radial wheel and the per-action hotkeys; the
 > panel (and its keyboard controls) is now the sole interface, and **UIExtensions is no
 > longer a dependency**.
+
+> **v0.9** adds a **⚙ Settings** window (header button): a **text-size** control
+> (A−/A+/Reset, scales the panel's fonts only) and a **background-opacity** slider that
+> fades the panel and the conversation log together. Both persist across sessions.
 
 ## The As / To model
 

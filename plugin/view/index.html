@@ -6,8 +6,9 @@
 <title>Playwright</title>
 <style>
   :root{
-    --bg:rgba(18,18,22,0.92);
-    --bg2:rgba(30,30,38,0.92);
+    --op:0.92;               /* panel background opacity (Settings slider) */
+    --bg:rgba(18,18,22,var(--op));
+    --bg2:rgba(30,30,38,var(--op));
     --line:rgba(255,255,255,0.10);
     --fg:#e8e6df;
     --muted:#9a978d;
@@ -64,7 +65,7 @@
   #log{
     position:fixed;top:48px;left:480px;width:430px;height:70vh;
     min-width:300px;min-height:220px;max-width:92vw;max-height:92vh;
-    background:rgba(16,16,20,0.60);backdrop-filter:blur(7px);
+    background:rgba(16,16,20,var(--op));backdrop-filter:blur(7px);
     border:1px solid var(--line);border-radius:10px;overflow:hidden;
     display:none;flex-direction:column;pointer-events:auto;
     box-shadow:0 12px 40px rgba(0,0,0,0.55);
@@ -105,6 +106,9 @@
   .fsbtn{cursor:pointer;font-size:calc(12px*var(--fs));min-width:30px;text-align:center;padding:3px 9px;border-radius:6px;border:1px solid var(--line);color:var(--fg);background:var(--bg2);font-weight:700;}
   .fsbtn:hover{border-color:var(--accent);color:var(--accent);}
   .fsval{font-size:calc(12px*var(--fs));color:var(--accent2);min-width:46px;text-align:center;font-weight:600;}
+  /* Range slider (background opacity). */
+  .pwslider{flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:3px;background:var(--line);outline:none;cursor:pointer;}
+  .pwslider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:50%;background:var(--accent);border:0;cursor:pointer;}
   .logbtn:hover{color:var(--accent);border-color:var(--accent);}
   .logbtn.del:hover{color:var(--danger);border-color:var(--danger);}
   /* Inline edit (replaces prompt()/confirm(), which CEF suppresses). */
@@ -145,6 +149,18 @@
     box-shadow:0 14px 44px rgba(0,0,0,0.6);
   }
   body.open.helpopen #controls{display:flex;}
+  /* Settings window (toggled by the cog header button). Same frame as #controls. */
+  #settings{
+    position:fixed;left:14px;top:58px;width:340px;max-height:calc(100% - 96px);
+    background:rgba(14,14,18,0.97);backdrop-filter:blur(8px);
+    border:1px solid var(--line);border-radius:10px;overflow:hidden;
+    display:none;flex-direction:column;pointer-events:auto;z-index:10001;
+    box-shadow:0 14px 44px rgba(0,0,0,0.6);
+  }
+  body.open.setopen #settings{display:flex;}
+  #settings .chead{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);cursor:move;}
+  #settings .chead .title{flex:1;font-size:calc(14px*var(--fs));letter-spacing:2px;color:var(--accent);font-weight:600;}
+  #settings .cbody{overflow-y:auto;padding:6px 4px 14px;}
   #controls .chead{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);cursor:move;}
   #controls .chead .title{flex:1;font-size:calc(14px*var(--fs));letter-spacing:2px;color:var(--accent);font-weight:600;}
   #controls .cbody{overflow-y:auto;padding:6px 4px 10px;}
@@ -241,6 +257,7 @@
 <div id="panel" tabindex="-1">
   <header>
     <div class="title">PLAYWRIGHT<small>scene control</small></div>
+    <div id="setBtn" class="hbtn" onclick="toggleSettings()" title="Settings">&#9881;</div>
     <div id="helpBtn" class="hbtn" onclick="toggleHelp()" title="Keyboard controls">?</div>
     <div class="closebtn" onclick="closePanel()">&#10005;</div>
     <div class="pillbar">
@@ -289,14 +306,6 @@
     <div class="closebtn" onclick="toggleHelp()">&#10005;</div>
   </div>
   <div class="cbody">
-    <div class="kgrp">Text size</div>
-    <div class="fsrow">
-      <span class="fsbtn" onclick="fontStep(-0.1)" title="Smaller">A&minus;</span>
-      <span id="fsLabel" class="fsval">100%</span>
-      <span class="fsbtn" onclick="fontStep(0.1)" title="Bigger">A+</span>
-      <span class="fsbtn fsreset" onclick="fontReset()" title="Reset to 100%">Reset</span>
-      <span class="kd" style="flex:1;text-align:right;">or <span class="kkey">[</span> <span class="kkey">]</span></span>
-    </div>
     <div class="kgrp">Nearby cast</div>
     <div class="krow"><span class="k"><span class="kkey">&uarr;</span><span class="kkey">&darr;</span></span><span class="kd">Move the cursor through the cast</span></div>
     <div class="krow"><span class="k"><span class="kkey">&larr;</span></span><span class="kd">Move the cursor to you (the player)</span></div>
@@ -327,6 +336,27 @@
     <div class="krow"><span class="k"><span class="kkey">=</span></span><span class="kd">Pause / unpause the game</span></div>
     <div class="krow"><span class="k"><span class="kkey">.</span></span><span class="kd">Toggle SkyrimNet whisper mode</span></div>
     <div class="krow"><span class="k"><span class="kkey">?</span> <span class="kkey">/</span></span><span class="kd">Open / close this controls window</span></div>
+  </div>
+</div>
+
+<div id="settings">
+  <div class="chead">
+    <div class="title">SETTINGS</div>
+    <div class="closebtn" onclick="toggleSettings()">&#10005;</div>
+  </div>
+  <div class="cbody">
+    <div class="kgrp">Text size</div>
+    <div class="fsrow">
+      <span class="fsbtn" onclick="fontStep(-0.1)" title="Smaller">A&minus;</span>
+      <span id="fsLabel" class="fsval">100%</span>
+      <span class="fsbtn" onclick="fontStep(0.1)" title="Bigger">A+</span>
+      <span class="fsbtn fsreset" onclick="fontReset()" title="Reset to 100%">Reset</span>
+    </div>
+    <div class="kgrp">Background opacity</div>
+    <div class="fsrow">
+      <input id="opSlider" class="pwslider" type="range" min="20" max="100" step="5" value="92" oninput="setOpacity(this.value)" title="Panel background opacity">
+      <span id="opLabel" class="fsval">92%</span>
+    </div>
   </div>
 </div>
 
@@ -576,18 +606,34 @@
     if(on) window.pwLogFetch("");
   }
 
-  // Controls/help window: toggled by the ? header button; static reference.
+  // Controls/help window and Settings window: each toggled by its header button.
+  // They share the same anchor, so opening one closes the other.
   function toggleHelp(){
+    document.body.classList.remove("setopen"); document.getElementById("setBtn").classList.remove("on");
     var on=document.body.classList.toggle("helpopen");
     document.getElementById("helpBtn").classList.toggle("on", on);
   }
-  // Dismiss the help window on any click outside it (but not on the header buttons).
+  function toggleSettings(){
+    document.body.classList.remove("helpopen"); document.getElementById("helpBtn").classList.remove("on");
+    var on=document.body.classList.toggle("setopen");
+    document.getElementById("setBtn").classList.toggle("on", on);
+  }
+  // Dismiss an open floating window on a click outside it (but not on a header button).
   document.addEventListener("pointerdown", function(e){
-    if(!document.body.classList.contains("helpopen")) return;
-    var c=document.getElementById("controls");
-    if(c && !c.contains(e.target) && !(e.target.closest && e.target.closest(".hbtn"))){
-      document.body.classList.remove("helpopen");
-      document.getElementById("helpBtn").classList.remove("on");
+    var onHbtn = e.target.closest && e.target.closest(".hbtn");
+    if(document.body.classList.contains("helpopen")){
+      var c=document.getElementById("controls");
+      if(c && !c.contains(e.target) && !onHbtn){
+        document.body.classList.remove("helpopen");
+        document.getElementById("helpBtn").classList.remove("on");
+      }
+    }
+    if(document.body.classList.contains("setopen")){
+      var s=document.getElementById("settings");
+      if(s && !s.contains(e.target) && !onHbtn){
+        document.body.classList.remove("setopen");
+        document.getElementById("setBtn").classList.remove("on");
+      }
     }
   });
 
@@ -734,6 +780,27 @@
     head.addEventListener("pointerup",function(){ if(!dr) return; dr=false; save(); });
   })();
 
+  // ---- Settings window: drag by its header. Position persists. ----
+  (function(){
+    var win=document.getElementById("settings");
+    var head=win.querySelector(".chead");
+    function save(){ if(win.offsetWidth<1) return; try{ localStorage.setItem("pwSetPos", JSON.stringify({x:win.offsetLeft,y:win.offsetTop})); }catch(_){} }
+    try{ var p=JSON.parse(localStorage.getItem("pwSetPos")||"null"); if(p){ win.style.left=p.x+"px"; win.style.top=p.y+"px"; } }catch(_){}
+    var dr=false,ox=0,oy=0;
+    head.addEventListener("pointerdown",function(e){
+      if(e.target.closest(".closebtn")) return;
+      dr=true; ox=e.clientX-win.offsetLeft; oy=e.clientY-win.offsetTop;
+      try{ head.setPointerCapture(e.pointerId); }catch(_){}
+      e.preventDefault();
+    });
+    head.addEventListener("pointermove",function(e){
+      if(!dr) return;
+      win.style.left=Math.max(0, Math.min(e.clientX-ox, window.innerWidth - win.offsetWidth))+"px";
+      win.style.top =Math.max(0, Math.min(e.clientY-oy, window.innerHeight - 40))+"px";
+    });
+    head.addEventListener("pointerup",function(){ if(!dr) return; dr=false; save(); });
+  })();
+
   // Called by C++ whenever Director Mode changes (and on load). The corner dot
   // is the red "recording" light -- shown only while Director Mode is on.
   window.pwSetDirector = function(v){
@@ -758,6 +825,22 @@
   function fontStep(d){ fontScale += d; applyFontScale(); }
   function fontReset(){ fontScale = 1; applyFontScale(); }
   applyFontScale();
+
+  // --- Background opacity ----------------------------------------------------
+  // Drives the --op alpha on the panel's --bg/--bg2 (Settings slider). Persisted
+  // in localStorage; clamped 0.20-1.00 so the panel never vanishes entirely.
+  var PW_OP_MIN=0.2, opacity=0.92;
+  try{ var _op=parseFloat(localStorage.getItem("pwOpacity")); if(_op>=0) opacity=_op; }catch(e){}
+  function applyOpacity(){
+    opacity = Math.max(PW_OP_MIN, Math.min(1, opacity));
+    document.documentElement.style.setProperty("--op", opacity.toFixed(2));
+    try{ localStorage.setItem("pwOpacity", opacity.toFixed(2)); }catch(e){}
+    var pct=Math.round(opacity*100);
+    var l=document.getElementById("opLabel"); if(l) l.textContent=pct+"%";
+    var s=document.getElementById("opSlider"); if(s) s.value=pct;
+  }
+  function setOpacity(pct){ opacity = pct/100; applyOpacity(); }
+  applyOpacity();
   // Restore the speaker/target pairing across panel close/reopen (persisted in localStorage).
   try{ var _p=JSON.parse(localStorage.getItem("pwPair")||"null");
     if(_p){ state.speaker=_p.s||null; state.speakerName=state.speaker?(_p.sn||"none"):"You"; state.target=_p.t||null; state.targetName=_p.tn||"none"; } }catch(e){}
@@ -1318,8 +1401,6 @@
       case "=": togglePause();   return;     // '=' key pauses/unpauses the game
       case ".": toggleWhisper(); return;     // '.' key toggles SkyrimNet whisper mode
       case "/": toggleHelp();    return;     // ? / key opens the controls window
-      case "[": fontStep(-0.1);  return;     // '[' shrinks the panel text
-      case "]": fontStep(0.1);   return;     // ']' enlarges the panel text
     }
   };
 
