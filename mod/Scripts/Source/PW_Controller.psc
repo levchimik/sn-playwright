@@ -312,68 +312,107 @@ Event OnUpdate()
     EndIf
 EndEvent
 
+; ------------------------------------------------------------------ nearest actor
+; Closest nearby actor to the player (excluding the player), or None if none found. Samples the
+; SkyrimNet interaction radius the same way NarrateText does (FindRandomActorFromRef is random,
+; so take several and keep the closest). Used to anchor system/narration events when the player
+; has no explicit target, so the event surfaces in the local scene and the player perceives it.
+Actor Function NearestActor()
+    Actor pl = Game.GetPlayer()
+    Float radius = SkyrimNetApi.GetConfigFloat("game", "interaction.maxDistance", 1600.0)
+    Actor best = None
+    Float bestDist = 0.0
+    Int tries = 0
+    While tries < 12
+        Actor cand = Game.FindRandomActorFromRef(pl, radius)
+        If cand && cand != pl
+            Float dist = pl.GetDistance(cand)
+            If !best || dist < bestDist
+                best = cand
+                bestDist = dist
+            EndIf
+        EndIf
+        tries += 1
+    EndWhile
+    Return best
+EndFunction
+
 ; ------------------------------------------------------------------ narrate
 ; Voice a scene event.
-;   - A named/profiled NPC nearby (or the panel pick) -> DirectNarration addressing it as the
-;     TARGET (no originator): it perceives, may react (named), and the player sees it. The
-;     good case (verified: event 376).
-;   - No named NPC (only an unknown/profile-less actor, or just the player) -> fall back to a
-;     RegisterPersistentEvent: it registers WITHOUT forcing a reaction, so there is no
-;     nameless reply. Associate a nearby unknown actor if there is one; otherwise a general
-;     world note. (DirectNarration with an unknown originator WOULD make it react namelessly,
-;     which is exactly what we're avoiding.)
-; The player is never the target (so never pulled in to react; Director Mode's blacklist also
-; keeps the player out of the audience). Search radius = SkyrimNet's live interaction range
-; (interaction.maxDistance: normal vs whisper), so reach tracks your current talk distance.
+;   - A nearby profiled NPC (the panel pick, or a randomly-sampled one in talk range) ->
+;     DirectNarration addressing it as the TARGET: it perceives and may react. The normal case --
+;     narration lands on whoever is around.
+;   - Player is ALONE (no profiled NPC in range) -> a silent RegisterPersistentEvent so the line is
+;     still VISIBLE without forcing a reaction. It only surfaces when originatingActor is set (cf.
+;     SystemEvent / SkyrimNet event 39: originator set, target empty), so originate from the nearest
+;     sampled actor if there is one, else the player. Target stays empty.
+; Search radius = SkyrimNet's live interaction range (interaction.maxDistance: normal vs whisper).
 Function NarrateText(String narration, Actor preferred)
     If narration == ""
         Return
     EndIf
     Actor pl = Game.GetPlayer()
-    Actor named = preferred                                    ; panel pick = the named target
+    Actor named = preferred                                    ; panel pick, if any
     If named == pl
-        named = None                                           ; never the player
+        named = None                                           ; the player is never the narration target
     EndIf
-    Actor fallback = None                                      ; CLOSEST nearby actor (originator if no named one)
+    Actor fallback = None                                      ; closest sampled actor (originator for the alone case)
     If !named
         Float radius = SkyrimNetApi.GetConfigFloat("game", "interaction.maxDistance", 1600.0)
         Float bestDist = 0.0
         Int tries = 0
-        ; Sample the area; FindRandomActorFromRef is random, so take several and keep the
-        ; CLOSEST -- a too-distant originator (another room) isn't perceived by the player,
-        ; whereas SkyrimNet's own silent narration picks a near NPC.
+        ; Sample the talk range; FindRandomActorFromRef is random, so take several and keep the
+        ; closest. The first profiled (named, non-virtual) one becomes the narration target.
         While !named && tries < 12
             Actor cand = Game.FindRandomActorFromRef(pl, radius)
             If cand && cand != pl
                 Float dist = pl.GetDistance(cand)
                 If !fallback || dist < bestDist
-                    fallback = cand                           ; keep the closest sampled actor
+                    fallback = cand
                     bestDist = dist
                 EndIf
                 String uuid = SkyrimNetApi.GetEntityUUID(cand)
                 If uuid != "" && !SkyrimNetApi.IsVirtualEntity(uuid) && SkyrimNetApi.GetEntityDisplayNameByUUID(uuid) != ""
-                    named = cand                               ; a named/profiled NPC
+                    named = cand
                 EndIf
             EndIf
             tries += 1
         EndWhile
     EndIf
     If named
-        SkyrimNetApi.DirectNarration(narration, None, named)            ; named NPC as TARGET -> visible, named reaction
+        ; Named NPC as ORIGINATOR (not target): it perceives and responds, and originatingActor is
+        ; set so the event surfaces. Passing it as the TARGET (None originator) leaves the engine to
+        ; auto-pick a speaker -- which fails when the target is the only NPC (no one to speak), so
+        ; originatingActor stays empty and the narration is invisible (cf. event 49 for Mordred).
+        SkyrimNetApi.DirectNarration(narration, named, None)
     Else
-        ; No named NPC -> persistent event (no reaction = no nameless reply); fallback may be None.
-        SkyrimNetApi.RegisterPersistentEvent(narration, fallback, None)
+        ; Alone -> visible, non-reacting persistent event; originatingActor must be set to surface.
+        Actor org = fallback
+        If !org
+            org = pl
+        EndIf
+        SkyrimNetApi.RegisterPersistentEvent(narration, org, None)
     EndIf
     Debug.Notification("Narrated")
 EndFunction
 
 ; System/meta event (panel "System" button): inject a neutral context note that NPCs
-; become aware of for context but do NOT react to (RegisterPersistentEvent). Surfaces in
-; the log as a "System" entry. When a target is selected the note is associated with them
-; (targetActor); otherwise it's a general world/system note.
+; become aware of for context but do NOT react to (RegisterPersistentEvent). A persistent event
+; only surfaces when originatingActor is set (cf. SkyrimNet's narration, event 39: originator set,
+; target empty). The shipped version passed originator==None and only a targetActor, so it never
+; surfaced (our event 31). Put the source actor in the ORIGINATOR slot instead: the panel selection
+; if any, else the nearest actor, else the player when truly alone -- target stays empty to mirror
+; SkyrimNet exactly. (Persistent events never trigger a reply, so a player originator is safe.)
 Function SystemEvent(String content, Actor target)
     If content != ""
-        SkyrimNetApi.RegisterPersistentEvent(content, None, target)
+        Actor org = target
+        If !org
+            org = NearestActor()
+        EndIf
+        If !org
+            org = Game.GetPlayer()
+        EndIf
+        SkyrimNetApi.RegisterPersistentEvent(content, org, None)
         Debug.Notification("System event sent")
     EndIf
 EndFunction
