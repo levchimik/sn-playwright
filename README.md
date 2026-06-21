@@ -1,4 +1,4 @@
-# Playwright — v0.10
+# Playwright — v0.11
 
 ![Playwright — Direct the Scene](mod/fomod/playwright.jpg)
 
@@ -28,6 +28,14 @@ crosshair aiming, multi-word names just work.
 > with a parameter form (actor-picker dropdowns where they apply) to fire it at that
 > actor — open several at once, they stay until closed. **Narrate** is also more
 > reliable: it routes through the nearest nearby NPC so the scene actually perceives it.
+
+> **v0.11** brings **virtual entities** into the cast: SkyrimNet's game-created speakers
+> (a custom companion like *Buddy*, a Wintersun shrine deity, …) appear under a **🎭
+> Virtual entities** toggle and can be addressed with **Say / Think / Prompt** — speak
+> to a deity and it answers in its own voice. Technical built-ins (Game Master, Narrator,
+> System) are hidden; only created entities show. Also adds a **cast name filter** to
+> find anyone when the list is crowded, and a **📋 Copy builder prompt** button that
+> hands any LLM everything it needs to write a Playwright scenario.
 
 ## The As / To model
 

@@ -230,6 +230,10 @@
   .scedit .scbeatsum b{color:var(--fg);font-weight:600;}
   .scedit .scdesc{font-size:calc(10px*var(--fs));color:var(--muted);font-style:italic;margin:5px 2px;line-height:1.45;}
   .scedit .schint{color:#6e6b63;font-style:italic;}
+  .scimport{padding:4px 2px 2px;}
+  .scimport .scfield{width:100%;box-sizing:border-box;background:var(--bg2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:calc(12px*var(--fs));font-family:inherit;}
+  .scimport textarea.scfield{resize:vertical;line-height:1.4;font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;white-space:pre;overflow:auto;}
+  .scimport .awempty{padding:0;}
   .awexec{background:var(--accent);color:#1a1a1a;border:0;border-radius:7px;padding:8px 16px;font-weight:600;font-size:calc(12px*var(--fs));cursor:pointer;}
   .awexec:hover{filter:brightness(1.08);}
   .ctxsep{height:1px;background:var(--line);margin:4px 6px;}
@@ -301,7 +305,24 @@
   .badge.tgt{background:rgba(127,168,214,0.22);color:var(--accent2);font-weight:600;}
   .badge.pinned{background:rgba(230,145,60,0.22);color:#e89a55;}      /* SkyrimNet pinned */
   .badge.follower{background:rgba(120,190,120,0.20);color:#86cf86;}   /* player's follower */
+  .badge.vebadge{background:rgba(160,120,200,0.22);color:#c3a0e0;}    /* virtual entity */
   .empty{color:var(--muted);font-size:calc(13px*var(--fs));text-align:center;padding:24px 12px;font-style:italic;}
+  /* Virtual-entities section: a toggle header under the cast, then VE rows. */
+  .vehdr{display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--muted);font-size:calc(12px*var(--fs));
+         padding:7px 12px;border-top:1px solid var(--line);margin-top:2px;user-select:none;}
+  .vehdr:hover{color:#c3a0e0;}
+  .vehdr .vecaret{font-size:calc(10px*var(--fs));width:10px;}
+  .vehdr .vecount{font-size:calc(10px*var(--fs));padding:1px 6px;border-radius:8px;background:rgba(160,120,200,0.18);color:#c3a0e0;}
+  .npc.ve .nm{color:#c3a0e0;}
+  /* NPC name filter (search box above the cast). */
+  #npcFilterBar{display:flex;align-items:center;gap:6px;padding:8px 12px 2px;}
+  #npcFilter{flex:1 1 auto;background:rgba(255,255,255,0.05);border:1px solid var(--line);color:var(--fg);
+             border-radius:8px;padding:6px 10px;font-size:calc(12px*var(--fs));outline:none;}
+  #npcFilter::placeholder{color:var(--muted);}
+  #npcFilter:focus{border-color:var(--accent);}
+  #npcFilterClear{display:none;cursor:pointer;color:var(--muted);padding:2px 7px;border-radius:6px;font-size:calc(12px*var(--fs));}
+  #npcFilterBar.active #npcFilterClear{display:inline;}
+  #npcFilterClear:hover{color:var(--fg);background:rgba(255,255,255,0.06);}
 
   footer{border-top:1px solid var(--line);padding:12px 14px;}
   #text{
@@ -354,6 +375,7 @@
 
   <div id="dirBanner" class="dir-banner"><span class="dot"></span>Director Mode &mdash; you've left the scene</div>
 
+  <div id="npcFilterBar"><input id="npcFilter" type="text" placeholder="Filter people&hellip;" spellcheck="false" oninput="render()"><span id="npcFilterClear" title="Clear filter" onclick="clearNpcFilter()">&#10005;</span></div>
   <div id="npcs"><div class="empty">Loading nearby people&hellip;</div></div>
 
   <footer>
@@ -895,7 +917,7 @@
     document.getElementById("dot").classList.toggle("on", (v==="1"||v===1||v===true));
   };
 
-  var state = { npcs:[], speaker:null, speakerName:"You", target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false, continuous:false, telepathy:true, gamemaster:true, npcReactions:true };
+  var state = { npcs:[], virtual:[], showVirtual:false, speaker:null, speakerName:"You", target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false, continuous:false, telepathy:true, gamemaster:true, npcReactions:true };
   try{ state.transform = localStorage.getItem("pwTransform")==="1"; }catch(e){}
 
   // --- Text scale (font-only) -----------------------------------------------
@@ -1225,6 +1247,7 @@
   var pwScenarios = null, pwScenLoading = false;   // registry (array) or null until first fetch
   var scenWin = null, scenIdx = -1, scenSel = 0, scenEdit = false;  // window; selected scenario; cursor; edit mode
   var scEditOpen = 0;   // editor accordion: index of the expanded beat (-1 = all collapsed)
+  var scenImport = false;   // true while the paste-JSON import panel is open
   // Sequencer run state. lastStat = most recent speech snapshot from Papyrus (q=queue size,
   // ms=since-audio-ended, tts=player-TTS finished). Timing uses the view's own clock for the
   // post-drain idle gap, so it doesn't depend on the exact ms semantics.
@@ -1261,10 +1284,21 @@
   // Reuses the exact "action|target|transform|speaker|text" wire format the panel buttons
   // send (and the execaction/sleep special forms). speaker/target are NAMES; Papyrus resolves
   // them via FindActorByName (or "player"), so scenario files carry no runtime FormIDs.
+  // A scenario beat may reference a virtual entity by name ("ve:Buddy" / "ve:wsn_deity") for
+  // readability/portability; resolve it to the live "ve:<uuid>" the engine needs before firing.
+  function veResolve(tok){
+    if(!tok || tok.indexOf("ve:")!==0 || !state.virtual) return tok;
+    var x = tok.slice(3);
+    for(var i=0;i<state.virtual.length;i++){
+      var v=state.virtual[i];
+      if(v.uuid===x || v.entityName===x || v.name===x) return "ve:"+(v.uuid||x);
+    }
+    return tok;   // not loaded -> leave as-is (fails gracefully)
+  }
   function pwBeatPayload(b){
     var d  = (b.do||"").trim();
-    var sp = (b.speaker!=null ? String(b.speaker) : "");
-    var tg = (b.target !=null ? String(b.target ) : "");
+    var sp = veResolve(b.speaker!=null ? String(b.speaker) : "");
+    var tg = veResolve(b.target !=null ? String(b.target ) : "");
     var tx = (b.text   !=null ? String(b.text   ) : "");
     var xf = b.improvise ? "1" : "0";
     if(d==="execaction"){
@@ -1410,13 +1444,15 @@
     scClearTyping();
     var body = scenWin.querySelector(".awbody");
     if(pwScenarios===null || pwScenLoading){ body.innerHTML='<div class="awempty">Loading scenarios…</div>'; return; }
+    if(scenImport){ renderScenImport(body); return; }
     if(scenIdx<0 || !pwScenarios[scenIdx]){ scenEdit=false; renderScenList(body); }
     else if(scenEdit){ renderScenEdit(body, pwScenarios[scenIdx]); }
     else { renderScenDetail(body, pwScenarios[scenIdx]); }
   }
   function renderScenList(body){
-    body.innerHTML='<div class="awexecbar scbar2"><button class="awexec scbtn-new">＋ New scene</button></div><div class="awlist"></div>';
+    body.innerHTML='<div class="awexecbar scbar2"><button class="awexec scbtn-new">＋ New scene</button><button class="awexec scbtn-import" style="flex:0 0 auto">⎘ Paste JSON</button></div><div class="awlist"></div>';
     body.querySelector(".scbtn-new").onclick=function(){ newScen(); };
+    body.querySelector(".scbtn-import").onclick=function(){ scenImport=true; renderScen(); };
     var L=body.querySelector(".awlist");
     if(!pwScenarios.length){ var em=document.createElement("div"); em.className="awempty"; em.innerHTML='No scenarios yet — create one above,<br>or drop a .json in SKSE/Plugins/SNPlaywright/scenarios/.'; L.appendChild(em); return; }
     pwScenarios.forEach(function(sc, idx){
@@ -1435,6 +1471,123 @@
       row.querySelector('[data-a="del"]').onclick=function(e){ e.stopPropagation(); scenIdx=idx; delScen(sc); };
       L.appendChild(row);
     });
+  }
+  // ---- JSON import ------------------------------------------------------------
+  // Parse a pasted scenario blob (e.g. from the Playwright Dramaturge) into a {name, beats}
+  // object. Tolerant of markdown code fences and a bare beats array; validates the shape and
+  // each beat's "do" so a bad paste fails loudly instead of producing an unrunnable scene.
+  var SC_KNOWN_DOS = { narrate:1, say:1, system:1, think:1, musethink:1, transform:1, execaction:1, sleep:1, sleeptalk:1, wake:1 };
+  function parseScenarioJSON(raw){
+    var txt = String(raw||"").trim();
+    var fence = txt.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);   // strip ```json … ``` wrappers
+    if(fence) txt = fence[1].trim();
+    if(!txt) throw new Error("Nothing to parse — paste a scenario JSON first.");
+    var obj; try{ obj = JSON.parse(txt); }catch(e){ throw new Error("Invalid JSON: "+e.message); }
+    if(Array.isArray(obj)) obj = { name:"Imported scene", beats:obj };   // tolerate a bare beats array
+    if(!obj || typeof obj!=="object") throw new Error('Top level must be an object: { "name", "beats" }.');
+    if(!Array.isArray(obj.beats)) throw new Error('Missing "beats" array.');
+    if(!obj.beats.length) throw new Error('"beats" is empty.');
+    obj.beats.forEach(function(b,i){
+      if(!b || typeof b!=="object") throw new Error("Beat "+(i+1)+" is not an object.");
+      if(!b.do) throw new Error('Beat '+(i+1)+' has no "do".');
+      if(!SC_KNOWN_DOS[b.do]) throw new Error('Beat '+(i+1)+': unknown do "'+b.do+'" (expected '+Object.keys(SC_KNOWN_DOS).join("/")+').');
+    });
+    var nm = (typeof obj.name==="string" && obj.name.trim()) ? obj.name.trim() : "Imported scene";
+    return { name:nm, beats:obj.beats };
+  }
+  // Assemble a self-contained prompt the user can paste into ANY LLM (incl. SkyrimNet's own chat
+  // agent) to get back a scenario JSON: scene rules + the live nearby cast + the execaction registry.
+  function scParamStr(a){
+    var ps=pwActionParams(a).filter(function(p){ return p.mapping!=="speaker" && p.mapping!=="static"; });
+    if(!ps.length) return "none";
+    return ps.map(function(p){
+      var seg=p.name+" ("+(p.type||"value")+(p.optional?", optional":"")+")";
+      if(p.options&&p.options.length) seg+=" [one of: "+p.options.join(", ")+"]";
+      if(p.desc) seg+=" — "+p.desc;
+      return seg;
+    }).join("; ");
+  }
+  function buildScenarioPrompt(){
+    if(pwActions===null && !pwActionsLoading){ pwActionsLoading=true; window.pwActionsFetch(); }
+    var cast=[]; (state.npcs||[]).forEach(function(np){ var n=(np.name||"").replace(" (you)",""); if(n && cast.indexOf(n)<0) cast.push(n); });
+    var castStr = cast.length ? cast.map(function(n){ return "- "+n; }).join("\n") : "- (no NPCs detected nearby right now)";
+    var actStr;
+    if(!pwActions || !pwActions.length){ actStr="(action list still loading — reopen this panel in a moment and click again)"; }
+    else { actStr = pwActions.filter(function(a){ return a.enabled!==false; })
+        .sort(function(a,b){ return pwActionName(a).localeCompare(pwActionName(b)); })
+        .map(function(a){ var nm=pwActionName(a); var desc=pwResolveDesc(a.description||"").replace(/\s+/g," ").trim();
+          return "- "+nm+(desc?" — "+desc:"")+"\n    params: "+scParamStr(a); }).join("\n"); }
+    var L=[];
+    L.push("You are the Playwright Dramaturge. Write a short, playable scene for the Playwright Skyrim mod as a single scenario JSON.");
+    L.push("");
+    L.push("A scenario is a JSON object: { \"name\": string, \"beats\": [ ... ] }. Each beat has a \"do\" verb plus fields. Actors are referenced by their EXACT in-game DISPLAY NAME (e.g. \"Lydia\") or \"player\". You may use any NPC, not only the ones listed below — but you must use their exact display name as it appears in game (the engine matches by name), and that actor must be loaded near the player when the scene plays. If you are unsure of an exact name, ask the user for it rather than guessing.");
+    L.push("");
+    L.push("BEAT VERBS:");
+    L.push("- system  — silent stage direction the NPCs know (no audio). Fields: speaker (the subject), text.");
+    L.push("- narrate — an NPC voices a narrated event aloud. Fields: speaker, target (optional), text.");
+    L.push("- say     — a spoken line from speaker to target. Fields: speaker, target, text, improvise (bool).");
+    L.push("            improvise:true = the NPC rephrases text in their own voice (write text as a direction); false/omitted = said verbatim. Prefer improvise:true; use verbatim only when exact wording matters.");
+    L.push("- think   — a private inner thought (no audio; colors later behavior). Fields: speaker OR target (the thinker), text.");
+    L.push("- musethink — like think, but the LLM expands text as a gist. Fields: speaker/target, text.");
+    L.push("- transform — speak an LLM-generated line built from text as a gist. Fields: speaker, text.");
+    L.push("- execaction — perform a registered action. Fields: target (the actor performing it), action (a name from the list below), args (object of that action's params).");
+    L.push("");
+    L.push("Optional per beat: \"wait\": \"speech\" | <milliseconds> | omit. narrate/say/transform default to waiting for the spoken line to finish; others ~700ms. Add a numeric wait only for a deliberate pause.");
+    L.push("");
+    L.push("GUIDANCE: Open with a system beat that sets the situation. Alternate narrate / say / the occasional think — don't make every beat a say. Use a think before a hard-to-motivate line to steer a stubborn NPC into playing along. 6–14 beats is a good length. Keep lines concise and performable.");
+    L.push("");
+    L.push("NEARBY CAST (detected near the player right now — handy exact names to draw on; you are NOT limited to these, any correctly-named loaded NPC works):");
+    L.push(castStr);
+    L.push("");
+    L.push("AVAILABLE ACTIONS for execaction (name — description; params):");
+    L.push(actStr);
+    L.push("");
+    L.push("OUTPUT: reply with exactly ONE ```json code block containing the scenario object — valid JSON, double-quoted keys/strings, no trailing commas, no comments. No prose outside the block.");
+    L.push("");
+    L.push("SCENE REQUEST: <describe the premise and which of the cast take part>");
+    return L.join("\n");
+  }
+  function renderScenImport(body){
+    body.innerHTML='<div class="awback"><span class="awbacklink">&#8592; Back</span><span class="awformtitle">Scenario builder &amp; import</span></div><div class="scimport"></div>';
+    body.querySelector(".awbacklink").onclick=function(){ scenImport=false; renderScen(); };
+    var root=body.querySelector(".scimport");
+    if(pwActions===null && !pwActionsLoading){ pwActionsLoading=true; window.pwActionsFetch(); }   // warm the action registry
+
+    var bnote=document.createElement("div"); bnote.className="awempty"; bnote.style.textAlign="left"; bnote.style.margin="0 0 6px";
+    bnote.innerHTML='<b>Step 1</b> — copy a ready-made prompt (scene rules + nearby NPCs + actions) into any LLM. It hands back a scenario JSON.';
+    root.appendChild(bnote);
+    var genbar=document.createElement("div"); genbar.className="awexecbar scbar2"; root.appendChild(genbar);
+    var gen=document.createElement("button"); gen.className="awexec"; gen.textContent="📋 Copy builder prompt"; genbar.appendChild(gen);
+    var pta=document.createElement("textarea"); pta.className="scfield"; pta.rows=8; pta.readOnly=true; pta.spellcheck=false; pta.style.display="none"; pta.style.marginTop="6px"; root.appendChild(pta);
+    gen.onclick=function(){
+      var txt=buildScenarioPrompt();
+      pta.value=txt; pta.style.display="block"; pta.focus(); pta.select();   // shown selected as a backup
+      try{ window.pwClipboard(txt); }catch(e){}                              // real ctrl+c via the DLL
+      try{ document.execCommand("copy"); }catch(e){}                         // best-effort in-CEF fallback
+      gen.textContent="Copied ✓ (or copy from below)";
+      setTimeout(function(){ gen.textContent="📋 Copy builder prompt"; }, 1600);
+    };
+
+    var hint=document.createElement("div"); hint.className="awempty"; hint.style.textAlign="left"; hint.style.margin="12px 0 6px";
+    hint.innerHTML='<b>Step 2</b> — paste the scenario JSON the LLM produced. Code fences are OK. It is saved and opened for review.';
+    root.appendChild(hint);
+    var ta=document.createElement("textarea"); ta.className="scfield"; ta.rows=12; ta.spellcheck=false;
+    ta.placeholder='{\n  "name": "My scene",\n  "beats": [\n    { "do": "narrate", "speaker": "Nazeem", "target": "Lydia", "text": "…" }\n  ]\n}';
+    scWireTyping(ta); root.appendChild(ta);
+    var msg=document.createElement("div"); msg.style.margin="6px 0"; msg.style.fontSize="12px"; root.appendChild(msg);
+    var bar=document.createElement("div"); bar.className="awexecbar scbar2"; root.appendChild(bar);
+    var imp=document.createElement("button"); imp.className="awexec"; imp.textContent="Parse & add";
+    imp.onclick=function(){
+      var res; try{ res = parseScenarioJSON(ta.value); }
+      catch(e){ msg.style.color="var(--danger)"; msg.textContent="✕ "+e.message; return; }
+      var sc={ name:res.name, _file:"", beats:res.beats };
+      if(!pwScenarios) pwScenarios=[];
+      pwScenarios.push(sc); scenIdx=pwScenarios.length-1; scenSel=0;
+      saveScen(sc);                                 // persist now (sets _file; re-push re-finds it)
+      scenImport=false; scenEdit=false;             // drop into the detail view, ready to Run
+      renderScen();
+    };
+    bar.appendChild(imp);
   }
   function renderScenDetail(body, sc){
     var beats = sc.beats || [];
@@ -1476,7 +1629,7 @@
   function scClearTyping(){ if(!scenWin) return; var ae=document.activeElement; if(ae && scenWin.contains(ae) && (ae.tagName==="INPUT"||ae.tagName==="SELECT"||ae.tagName==="TEXTAREA")) window.pwConfig("typingEnd|1"); }
   function scLabel(t){ var d=document.createElement("div"); d.className="sclabel"; d.textContent=t; return d; }
   function scInput(val, ph){ var i=document.createElement("input"); i.className="scfield"; i.value=(val==null?"":String(val)); if(ph) i.placeholder=ph; scWireTyping(i); return i; }
-  function scActorInput(val){ var i=scInput(val, "name (or 'player')"); i.setAttribute("list","scCastDL"); return i; }
+  function scActorInput(val, allowVE){ var i=scInput(val, "name (or 'player')"); i.setAttribute("list", allowVE ? "scVEDL" : "scCastDL"); return i; }
   function scTextarea(val){ var t=document.createElement("textarea"); t.className="scfield"; t.rows=2; t.value=(val==null?"":String(val)); scWireTyping(t); return t; }
   // Which fields each beat type shows.
   function beatFields(d){
@@ -1586,6 +1739,12 @@
     var po=document.createElement("option"); po.value="player"; dl.appendChild(po);
     (state.npcs||[]).forEach(function(np){ var o=document.createElement("option"); o.value=(np.name||"").replace(" (you)",""); dl.appendChild(o); });
     root.appendChild(dl);
+    // Second datalist for VE-eligible beats: the cast PLUS virtual entities (as "ve:<name>" tokens).
+    var vdl=document.createElement("datalist"); vdl.id="scVEDL";
+    var vpo=document.createElement("option"); vpo.value="player"; vdl.appendChild(vpo);
+    (state.npcs||[]).forEach(function(np){ var o=document.createElement("option"); o.value=(np.name||"").replace(" (you)",""); vdl.appendChild(o); });
+    (state.virtual||[]).forEach(function(v){ var o=document.createElement("option"); o.value="ve:"+(v.entityName||v.name); o.textContent=v.name+" (virtual)"; vdl.appendChild(o); });
+    root.appendChild(vdl);
 
     root.appendChild(scLabel("Scene name"));
     var nameI=scInput(sc.name, "scene name"); nameI.oninput=function(){ sc.name=nameI.value; }; root.appendChild(nameI);
@@ -1615,7 +1774,7 @@
       head.appendChild(caret);
       var num=document.createElement("span"); num.className="scnum"; num.textContent=(i+1)+"."; head.appendChild(num);
       var doSel=document.createElement("select"); doSel.className="scfield";
-      ["narrate","say","system","think","musethink","transform","execaction","sleep","sleeptalk","wake"].forEach(function(dd){
+      ["narrate","say","system","think","musethink","transform","execaction"].forEach(function(dd){
         var o=document.createElement("option"); o.value=dd; o.textContent=doLabel(dd); if(d===dd) o.selected=true; doSel.appendChild(o);
       });
       doSel.onchange=function(){ b.do=doSel.value; renderScen(); };
@@ -1640,8 +1799,10 @@
     if(!open) return card;   // collapsed: header only
 
     var f=beatFields(d);
-    if(f.speaker){ card.appendChild(scLabel("speaker")); var si=scActorInput(b.speaker); si.oninput=function(){ b.speaker=si.value; }; card.appendChild(si); }
-    if(f.target){ card.appendChild(scLabel(f.speaker ? "target" : (d==="execaction" ? "performer" : "actor"))); var ti=scActorInput(b.target); ti.oninput=function(){ b.target=ti.value; }; card.appendChild(ti); }
+    // Virtual entities are eligible only for speech/think beats (say/narrate/transform/think).
+    var veOK = (d==="say"||d==="narrate"||d==="transform"||d==="think");
+    if(f.speaker){ card.appendChild(scLabel("speaker")); var si=scActorInput(b.speaker, veOK); si.oninput=function(){ b.speaker=si.value; }; card.appendChild(si); }
+    if(f.target){ card.appendChild(scLabel(f.speaker ? "target" : (d==="execaction" ? "performer" : "actor"))); var ti=scActorInput(b.target, veOK); ti.oninput=function(){ b.target=ti.value; }; card.appendChild(ti); }
     if(d==="execaction"){ buildExecFields(b, card); }
     if(f.text){ card.appendChild(scLabel("text")); var tx=scTextarea(b.text); tx.oninput=function(){ b.text=tx.value; }; card.appendChild(tx); }
     if(f.improvise || f.wait){
@@ -1690,10 +1851,16 @@
       // Render-worthy signature: header flags + the SET of actors and their states — NOT distance,
       // which jitters every poll. Lets the 1 Hz poll skip the DOM rebuild when nothing meaningful
       // changed, so an open ⋯ menu / selection survives while you reposition.
+      // Only CREATED virtual entities (RegisterVirtualNPC -> "public"/"private") are offered as
+      // speakers. The built-in technical ones (Game Master, Narrator, Player Thoughts, System Voice)
+      // carry conversationMode "system" and are filtered out -- they're engine plumbing, not roles.
+      var vrt = (d.virtual || []).filter(function(v){ return (v.mode||"") !== "system"; });
       var sig = (d.directorMode?1:0)+"|"+(d.pauseGame?1:0)+"|"+(d.whisper?1:0)+"|"+
-                (d.gamemaster?1:0)+"|"+(d.npcReactions?1:0)+"|"+
-                npcs.map(function(n){return n.id+":"+n.state+":"+n.dist+(n.player?"P":"")+(n.follower?"F":"")+(n.pinned?"X":"");}).join(",");
+                (d.gamemaster?1:0)+"|"+(d.npcReactions?1:0)+"|"+(state.showVirtual?1:0)+"|"+
+                npcs.map(function(n){return n.id+":"+n.state+":"+n.dist+(n.player?"P":"")+(n.follower?"F":"")+(n.pinned?"X":"");}).join(",")+
+                "|"+vrt.map(function(v){return v.name;}).join(",");
       state.npcs = npcs;
+      state.virtual = vrt;
       state.director = !!d.directorMode;
       state.pause = !!d.pauseGame;
       state.whisper = !!d.whisper;
@@ -1705,6 +1872,14 @@
       // Drop a selected speaker/target once they leave the nearby cast (walked off / unloaded).
       // The player ("player") is always present in the list, so it never clears.
       var _ids = {}; npcs.forEach(function(n){ _ids[n.id] = 1; });
+      // Keep a selected virtual entity alive across the 1 Hz rebuild. The row id is "ve:"+(uuid||name),
+      // so the selection token can be ANY of uuid / name / entityName -- exempt all three, else the
+      // clear-guard below wipes a "ve:<uuid>" target a tick after you pick it (-> say||0||).
+      vrt.forEach(function(v){
+        if(v.name)       _ids["ve:"+v.name] = 1;
+        if(v.uuid)       _ids["ve:"+v.uuid] = 1;
+        if(v.entityName) _ids["ve:"+v.entityName] = 1;
+      });
       var _pairChanged = false;
       if(state.speaker && state.speaker !== "player" && !_ids[state.speaker]){
         state.speaker = null; state.speakerName = "You"; _pairChanged = true;
@@ -1713,13 +1888,15 @@
         state.target = null; state.targetName = "none"; _pairChanged = true;
       }
       if(_pairChanged) savePairing();
+      // Auto-close an open ⋯ menu once its NPC leaves the nearby cast (walked too far / unloaded).
+      if(state.ctxNpc && state.ctxNpc !== "player" && !_ids[state.ctxNpc]) closeCtxMenu();
       // Keep the cursor index in range.
       if(nav.npc >= npcs.length) nav.npc = npcs.length - 1;
       if(sig === state._sig) return;   // nothing changed (incl. distance) -> skip
-      // don't yank an open ⋯ menu out from under the user mid-interaction; refresh once it closes
-      var cm = document.getElementById("ctxMenu");
-      if(cm && cm.classList.contains("open")) return;
       state._sig = sig;
+      // The ⋯ menu no longer freezes the list. render() re-anchors an open menu to its NPC's new
+      // row; if that NPC has dropped out of the nearby cast (walked too far / unloaded) it isn't
+      // reopened -> the menu auto-closes.
       render();
     }catch(e){ console.error("pwSetData parse error", e, json); }
   };
@@ -1755,13 +1932,22 @@
     nr.textContent = "NPC React: " + (state.npcReactions ? "on" : "off");
     nr.className = "pill" + (state.npcReactions ? " on" : "");
 
-    closeCtxMenu();   // any open action menu is stale once the list re-renders
+    // The ⋯ menu is a floating element outside the list, so rebuilding the rows leaves it in place.
+    // We deliberately do NOT close or re-anchor it here -- it stays put until dismissed or its NPC
+    // leaves the nearby cast (auto-closed in pwSetData).
     var box = document.getElementById("npcs");
     box.innerHTML = "";
+    // Name filter (the search box above the list). Survives the 1 Hz rebuild because it lives outside
+    // #npcs; render() re-applies it each pass. Filters both the cast and the virtual entities.
+    var fq = ((document.getElementById("npcFilter")||{}).value || "").trim().toLowerCase();
+    document.getElementById("npcFilterBar").classList.toggle("active", !!fq);
+    var matched = 0;
     if(!state.npcs.length){
       box.innerHTML = '<div class="empty">No SkyrimNet people nearby.</div>';
     } else {
       state.npcs.forEach(function(n, idx){
+        if(fq && String(n.name||"").toLowerCase().indexOf(fq)<0) return;   // filter by name
+        matched++;
         var isCursor = (idx===nav.npc);          // .sel doubles as the keyboard cursor
         var row = document.createElement("div");
         row.className = "npc" + (n.player ? " you":"") + (isCursor ? " sel":"");
@@ -1788,10 +1974,44 @@
         box.appendChild(row);
       });
     }
+    // --- Virtual entities: a toggle-able section under the cast. Non-actor speakers (Narrator,
+    //     Game Master, custom). Selectable As/To for speech/think/prompt only (gated in the ⋯ menu
+    //     and the action bar). The list is mouse-only (not part of the keyboard cursor over npcs). ---
+    if(state.virtual && state.virtual.length){
+      var vhdr = document.createElement("div");
+      vhdr.className = "vehdr" + (state.showVirtual ? " open" : "");
+      vhdr.innerHTML = '<span class="vecaret">'+(state.showVirtual?"▾":"▸")+'</span> 🎭 Virtual entities <span class="vecount">'+state.virtual.length+'</span>';
+      vhdr.onclick = function(){ state.showVirtual = !state.showVirtual; render(); };
+      box.appendChild(vhdr);
+      if(state.showVirtual || fq){   // an active filter reveals matching VEs even when collapsed
+        state.virtual.forEach(function(v){
+          if(fq && String(v.name||"").toLowerCase().indexOf(fq)<0) return;
+          matched++;
+          var ve = { id:"ve:"+(v.uuid||v.name), name:v.name, virtual:true, voiceId:v.voiceId, mode:v.mode };
+          var vrow = document.createElement("div"); vrow.className = "npc ve";
+          var vbadge = '<span class="badge vebadge">virtual</span>';
+          if(state.speaker===ve.id) vbadge += ' <span class="badge spkr">As</span>';
+          if(state.target===ve.id)  vbadge += ' <span class="badge tgt">To</span>';
+          var vhead = document.createElement("div"); vhead.className = "npchead";
+          vhead.innerHTML = '<span class="nm">'+esc(ve.name)+'</span>'+vbadge;
+          vhead.onclick = function(e){ if(e.ctrlKey){ setTo(ve); } else { setAs(ve); } };   // click=As, Ctrl+click=To
+          var vmenu = document.createElement("div"); vmenu.className = "npcmenu"; vmenu.textContent = "⋯"; vmenu.title = "Actions";
+          vmenu.onclick = function(e){ e.stopPropagation(); openCtxMenu(ve, vmenu); };
+          vhead.appendChild(vmenu);
+          vrow.appendChild(vhead);
+          box.appendChild(vrow);
+        });
+      }
+    }
+    if(fq && matched===0 && state.npcs.length){
+      var nmx=document.createElement("div"); nmx.className="empty"; nmx.textContent="No one matches your filter."; box.appendChild(nmx);
+    }
     refreshButtons();
     document.getElementById("speakerName").textContent = state.speakerName;
     document.getElementById("targetName").textContent = state.targetName;
   }
+
+  function clearNpcFilter(){ var f=document.getElementById("npcFilter"); if(f){ f.value=""; f.focus(); } render(); }
 
   // ---- per-character action menu: data-driven so the FOMOD (and other mods) can add or
   //      remove buttons. The DLL reads every *.json fragment in
@@ -1860,9 +2080,11 @@
 
   function openCtxMenu(n, anchorEl){
     var m = document.getElementById("ctxMenu");
+    state.ctxNpc = n.id;   // remember whose menu this is, so a list refresh can auto-close it when they leave
     m.innerHTML = "";
     pwMenu.forEach(function(cfg){
       if(!cfg || !cfg.id || !pwShow(cfg, n)) return;
+      if(n.virtual && cfg.id !== "prompt") return;   // virtual entities: only Prompt from the data items
       var d = document.createElement("div");
       d.className = "ctxitem";
       d.textContent = (n.player && cfg.labelSelf) ? cfg.labelSelf : (cfg.label || cfg.id);
@@ -1872,7 +2094,10 @@
       d.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); quickFire(act, n); };
       m.appendChild(d);
     });
-    // Built-in capabilities for this actor (always present, after the data-driven items).
+    // Built-in capabilities for this actor (always present, after the data-driven items). Virtual
+    // entities get none of these: LLM-think (musethink/GenerateNPCThought) has no ByUUID variant and
+    // the action launcher (execaction) isn't allowed for them -- so we skip the separator too.
+    if(!n.virtual){
     var sep = document.createElement("div"); sep.className = "ctxsep"; m.appendChild(sep);
     // Think to Self: autonomous thought from SkyrimNet's LLM (NPC -> GenerateNPCThought,
     // player row -> TriggerPlayerThought). Only meaningful while awake. quickFire sends
@@ -1890,6 +2115,7 @@
     da.textContent = "Actions…";
     da.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); openActionWindow(n); };
     m.appendChild(da);
+    }   // end !n.virtual built-in capabilities
     // Anchor below the ⋯, clamped to the viewport.
     var r = anchorEl.getBoundingClientRect();
     m.classList.add("open");                       // show first so we can measure
@@ -1899,7 +2125,7 @@
     m.style.left = Math.max(6, left) + "px";
     m.style.top  = Math.max(6, top) + "px";
   }
-  function closeCtxMenu(){ document.getElementById("ctxMenu").classList.remove("open"); nav.menu=-1; }
+  function closeCtxMenu(){ document.getElementById("ctxMenu").classList.remove("open"); nav.menu=-1; state.ctxNpc=null; }
   // Dismiss the menu on any outside click.
   document.addEventListener("pointerdown", function(e){
     var m = document.getElementById("ctxMenu");
@@ -1947,11 +2173,15 @@
   function refreshButtons(){
     var hasText = document.getElementById("text").value.trim().length>0;
     var hasActor = !!(state.speaker || state.target);
+    // A virtual entity is As/To -> only the voice/think bar actions apply (say/think/narrate).
+    // System (and anything else) can't address a non-actor, so disable it.
+    var veSel = (state.speaker && state.speaker.indexOf("ve:")===0) || (state.target && state.target.indexOf("ve:")===0);
     document.querySelectorAll(".actbtn").forEach(function(b){
       var need = (b.getAttribute("data-need")||"").split(",");
       var ok = true;
       if(need.indexOf("target")>=0 && !hasActor) ok=false;
       if(need.indexOf("text")>=0 && !hasText) ok=false;
+      if(veSel){ var act=b.getAttribute("data-act"); if(act!=="say" && act!=="think" && act!=="narrate") ok=false; }
       b.classList.toggle("disabled", !ok);
     });
   }
@@ -2068,6 +2298,17 @@
     // if focus fell to nothing (clicked empty space), not if it moved to another field.
     setTimeout(function(){ var a=document.activeElement; if(!a || a===document.body) focusKc(); }, 0);
   });
+  // The cast filter is a real text field too: pause the DLL's nav-key forwarding while it's focused
+  // (same as the compose box) so letters land in it instead of being stolen to #text.
+  (function(){
+    var nf = document.getElementById("npcFilter");
+    if(!nf) return;
+    nf.addEventListener("focus", function(){ window.pwConfig("typing|1"); });
+    nf.addEventListener("blur",  function(){
+      window.pwConfig("typing|0");
+      setTimeout(function(){ var a=document.activeElement; if(!a || a===document.body) focusKc(); }, 0);
+    });
+  })();
   // ---- corner dot: restore saved position + free drag (while panel focused) ----
   var dot = document.getElementById("dot");
   try{
@@ -2283,6 +2524,7 @@
     if(nav.menu>=0 && document.getElementById("ctxMenu").classList.contains("open")){ e.preventDefault(); return; }
     var ae=document.activeElement;
     if(ae && ae.closest && ae.closest(".actionwin")) return;   // typing/keys belong to a focused action window field
+    if(ae && ae.id==="npcFilter") return;                      // the cast name filter owns its own typing
     if(ae===textBox || (ae && ae.classList && ae.classList.contains("edta"))) return;  // already typing
     // Only an actual alphabet letter starts composing. CEF delivers every key's keydown to the
     // page (independently of the DLL), so digits/symbols would otherwise focus the box and print

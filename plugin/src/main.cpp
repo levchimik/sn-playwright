@@ -99,6 +99,25 @@ namespace
     std::mutex               g_sceneMutex;
     std::vector<SceneActor>  g_scene;            // guarded by g_sceneMutex
     std::atomic<bool>        g_sceneValid{false};  // a SkyrimNet fetch has succeeded at least once
+
+    // SkyrimNet virtual entities (Game Master / Narrator / custom registered ones). Non-physical
+    // speakers addressed by entity UUID (not Actor). We enumerate the ENABLED ones from
+    // /config?api=get&name=VirtualEntities and push them as a separate "virtual" array so the panel
+    // can offer them as speaker/target for speech/think/prompt only. Refreshed alongside the cast.
+    struct VirtualEnt
+    {
+        std::string entityName;   // unique id ("System Voice")
+        std::string displayName;  // shown name ("System") -- also what GetEntityDisplayNameByUUID returns
+        std::string voiceId;
+        std::string mode;         // conversationMode
+        std::string uuid;         // real 64-bit entity UUID (from /characters), for *ByUUID addressing
+    };
+    std::mutex               g_virtualMutex;
+    std::vector<VirtualEnt>  g_virtual;           // ENABLED virtual entities, guarded by g_virtualMutex
+    // entityName -> real entity UUID, resolved once from /characters?api=list (that list is ~750 KB and
+    // the UUIDs are stable for the session, so we cache rather than refetch each poll).
+    std::mutex                                       g_veUuidMutex;
+    std::vector<std::pair<std::string, std::string>> g_veUuidCache;
     std::mutex               g_pinnedMutex;
     std::vector<std::string> g_pinnedUuids;       // UUIDs in SkyrimNet's "Pinned" group; guarded by g_pinnedMutex
 
@@ -767,6 +786,9 @@ namespace
         }
     }
 
+    void FetchVirtualBlocking();                       // defined just below FetchSceneBlocking (called from it)
+    void ResolveVeUuids(std::vector<VirtualEnt>&);     // fills VE real UUIDs (defined below FetchVirtualBlocking)
+
     // Pull SkyrimNet's nearby/addressable cast and cache it in g_scene. Runs OFF the main thread (HTTP).
     //
     // /game-data?api=nearby-actors is a lightweight, reliable data query (unlike the render-template
@@ -831,6 +853,116 @@ namespace
         }
         g_sceneValid.store(true);
         FetchPinnedBlocking();  // refresh SkyrimNet's "Pinned" group alongside the cast (cheap localhost)
+        FetchVirtualBlocking(); // refresh enabled virtual entities alongside the cast (cheap localhost)
+    }
+
+    // Pull SkyrimNet's ENABLED virtual entities and cache them in g_virtual. Runs OFF the main thread.
+    // /config?api=get&name=VirtualEntities returns {data:{...,entities:[{entityName,displayName,enabled,
+    // voiceId,conversationMode},...]}}. We keep only enabled==true (respect disabled). The objects are
+    // flat (no nested braces), so we walk them the same way FetchSceneBlocking walks actors. On any HTTP
+    // failure we keep the last good list (no blink).
+    void FetchVirtualBlocking()
+    {
+        const std::string resp = HttpRequest(L"GET", "/config?api=get&name=VirtualEntities", "");
+        const size_t ap = resp.find("\"entities\"");
+        if (resp.empty() || ap == std::string::npos) {
+            return;  // server off / bad response -> keep last good list
+        }
+        std::vector<VirtualEnt> ents;
+        const size_t lb = resp.find('[', ap);
+        const size_t rb = (lb != std::string::npos) ? resp.find(']', lb) : std::string::npos;
+        if (lb != std::string::npos && rb != std::string::npos) {
+            size_t pos = lb + 1;
+            for (;;) {
+                const size_t os = resp.find('{', pos);
+                if (os == std::string::npos || os > rb) {
+                    break;
+                }
+                const size_t oe = resp.find('}', os);  // entity objects are flat -- no nested braces
+                if (oe == std::string::npos || oe > rb) {
+                    break;
+                }
+                const std::string obj = resp.substr(os, oe - os + 1);
+                pos = oe + 1;
+                if (JsonBool(obj, "enabled", 0) != 1) {
+                    continue;  // respect disabled virtual entities
+                }
+                std::string en = JsonStr(obj, "entityName");
+                std::string dn = JsonStr(obj, "displayName");
+                if (dn.empty()) {
+                    dn = en;
+                }
+                if (dn.empty()) {
+                    continue;
+                }
+                ents.push_back(VirtualEnt{ en, dn, JsonStr(obj, "voiceId"), JsonStr(obj, "conversationMode"), "" });
+            }
+        }
+        ResolveVeUuids(ents);   // fill in each VE's real entity UUID (cached; one /characters fetch)
+        {
+            std::lock_guard<std::mutex> lock(g_virtualMutex);
+            g_virtual.swap(ents);
+        }
+    }
+
+    // Resolve each virtual entity's real 64-bit UUID by its registration name. Virtual NPCs aren't in
+    // the 0x1000000 range the get_virtual_npc_list decorator's EXAMPLE implied -- they carry full hashed
+    // UUIDs (e.g. "Buddy" -> 6D247B5D915BC6C7). /characters?api=list exposes them as actorName/actorUUID
+    // pairs. We cache (the list is ~750 KB) and only fetch when an entity's UUID isn't cached yet.
+    std::string CachedVeUuid(const std::string& name)
+    {
+        std::lock_guard<std::mutex> lk(g_veUuidMutex);
+        for (const auto& kv : g_veUuidCache) {
+            if (kv.first == name) {
+                return kv.second;
+            }
+        }
+        return "";
+    }
+    void ResolveVeUuids(std::vector<VirtualEnt>& ents)
+    {
+        bool anyMissing = false;
+        for (auto& e : ents) {
+            e.uuid = CachedVeUuid(e.entityName);
+            if (e.uuid.empty() && !e.entityName.empty()) {
+                anyMissing = true;
+            }
+        }
+        if (!anyMissing) {
+            return;  // every enabled VE already resolved -> skip the heavy fetch
+        }
+        const std::string resp = HttpRequest(L"GET", "/characters?api=list", "");
+        if (resp.empty()) {
+            return;
+        }
+        for (auto& e : ents) {
+            if (!e.uuid.empty() || e.entityName.empty()) {
+                continue;
+            }
+            // Find this entity's object by its actorName, then the actorUUID that follows it.
+            const std::string needle = "\"actorName\":\"" + e.entityName + "\"";
+            const size_t p = resp.find(needle);
+            if (p == std::string::npos) {
+                continue;
+            }
+            const std::string uk = "\"actorUUID\":\"";
+            const size_t u = resp.find(uk, p);
+            if (u == std::string::npos) {
+                continue;
+            }
+            const size_t s = u + uk.size();
+            const size_t end = resp.find('"', s);
+            if (end == std::string::npos) {
+                continue;
+            }
+            const std::string uuid = resp.substr(s, end - s);
+            if (uuid.empty()) {
+                continue;
+            }
+            e.uuid = uuid;
+            std::lock_guard<std::mutex> lk(g_veUuidMutex);
+            g_veUuidCache.emplace_back(e.entityName, uuid);
+        }
     }
 
     // Build the {"directorMode":bool,"npcs":[...]} payload. Primary source is SkyrimNet's scene snapshot
@@ -994,6 +1126,28 @@ namespace
             json += ",\"uuid\":\"";
             json += e.uuid;
             json += "\"}";
+        }
+        json += "],\"virtual\":[";
+        {
+            std::lock_guard<std::mutex> lock(g_virtualMutex);
+            bool firstVe = true;
+            for (const auto& v : g_virtual) {
+                if (!firstVe) {
+                    json += ",";
+                }
+                firstVe = false;
+                json += "{\"name\":\"";
+                json += JsonEsc(v.displayName.c_str());
+                json += "\",\"entityName\":\"";
+                json += JsonEsc(v.entityName.c_str());
+                json += "\",\"voiceId\":\"";
+                json += JsonEsc(v.voiceId.c_str());
+                json += "\",\"mode\":\"";
+                json += JsonEsc(v.mode.c_str());
+                json += "\",\"uuid\":\"";
+                json += JsonEsc(v.uuid.c_str());
+                json += "\"}";
+            }
         }
         json += "]}";
         return json;
@@ -1696,6 +1850,33 @@ namespace
         }).detach();
     }
 
+    // Put UTF-8 text on the Windows clipboard as CF_UNICODETEXT. The CEF view's
+    // document.execCommand("copy") no-ops in this overlay, so the panel routes its
+    // "copy" buttons through here for a real ctrl+c-equivalent.
+    void SetClipboardUtf8(const std::string& a_utf8)
+    {
+        if (!OpenClipboard(nullptr)) {
+            return;
+        }
+        EmptyClipboard();
+        const int wlen = MultiByteToWideChar(CP_UTF8, 0, a_utf8.c_str(), static_cast<int>(a_utf8.size()), nullptr, 0);
+        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, (static_cast<size_t>(wlen) + 1) * sizeof(wchar_t));
+        if (hMem) {
+            auto* dst = static_cast<wchar_t*>(GlobalLock(hMem));
+            if (dst) {
+                if (wlen > 0) {
+                    MultiByteToWideChar(CP_UTF8, 0, a_utf8.c_str(), static_cast<int>(a_utf8.size()), dst, wlen);
+                }
+                dst[wlen] = L'\0';
+                GlobalUnlock(hMem);
+                SetClipboardData(CF_UNICODETEXT, hMem);  // system takes ownership of hMem on success
+            } else {
+                GlobalFree(hMem);
+            }
+        }
+        CloseClipboard();
+    }
+
     // ---- JS listener callbacks (free functions: no captures) ----
     void OnJsCommand(const char* a_arg)
     {
@@ -1840,6 +2021,14 @@ namespace
         }
     }
 
+    // Copy arbitrary text to the OS clipboard on demand (builder prompt, etc.).
+    void OnJsClipboard(const char* a_arg)
+    {
+        if (a_arg && *a_arg) {
+            SetClipboardUtf8(a_arg);
+        }
+    }
+
     void OnJsLogEdit(const char* a_arg)
     {
         if (!a_arg) {
@@ -1921,6 +2110,7 @@ namespace
             g_prisma->RegisterJSListener(a_view, "pwScenariosFetch", OnJsScenariosFetch);
             g_prisma->RegisterJSListener(a_view, "pwScenarioSave", OnJsScenarioSave);
             g_prisma->RegisterJSListener(a_view, "pwScenarioDelete", OnJsScenarioDelete);
+            g_prisma->RegisterJSListener(a_view, "pwClipboard", OnJsClipboard);
             // The view stays SHOWN at all times so its corner dot widget is always
             // visible; "closed" just collapses to the dot (unfocused, click-through
             // via pointer-events:none on empty areas). It is never Hidden.

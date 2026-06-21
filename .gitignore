@@ -10,3 +10,6 @@ mod/meta.ini
 
 # FOMOD build output (regenerated from mod/ on demand)
 dist/
+
+# Scratch / scrap workspace (decompiles, backups, vanilla sources, verify dumps)
+_tmp/

@@ -690,6 +690,14 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
     ; Diagnostic (v0.6): confirms the JS->C++->Papyrus bridge delivered the click.
     Debug.Trace("[Playwright] OnPrismaCommand: " + strArg, 0)
 
+    ; --- Virtual-entity routing: a "ve:" speaker/target isn't an Actor, so the normal Actor path
+    ;     can't address it. For the speech/think/prompt actions, hand off to the *ByUUID path. Every
+    ;     other action ignores VE tokens (they resolve to None above and simply no-op).
+    If (IsVEToken(speakerTok) || IsVEToken(targetTok)) && (action == "say" || action == "narrate" || action == "transform" || action == "think" || action == "prompt")
+        HandleVEAction(action, speakerTok, targetTok, xform, text)
+        Return
+    EndIf
+
     If action == "director"
         ToggleDirector()
     ElseIf action == "whisper"
@@ -823,6 +831,104 @@ Function PrismaWake(Actor t)
     ElseIf stf && t.IsInFaction(stf)
         ToggleSleeptalkActor(t)   ; wakes
     EndIf
+EndFunction
+
+; ------------------------------------------------------------------ virtual entities
+; A "ve:<displayName>" token addresses a SkyrimNet virtual entity (Narrator, Game Master, a
+; registered custom entity) rather than an Actor. Virtual entities have no Actor, so speech / think /
+; prompt for them must go through the *ByUUID calls. We resolve the display name to the entity's hex
+; UUID by scanning the virtual-UUID range (SkyrimNet assigns these from 0x1000000, contiguous; only a
+; handful exist) and matching GetEntityDisplayNameByUUID. The panel only emits ve: tokens for the
+; speech/think/prompt actions, so no other path needs to understand them.
+Bool Function IsVEToken(String token)
+    Return StringUtil.GetLength(token) >= 3 && StringUtil.SubString(token, 0, 3) == "ve:"
+EndFunction
+
+; Entity UUID for a panel token. A "ve:" token already carries the virtual entity's REAL 64-bit UUID
+; (the view resolves name -> uuid from the live VE list the DLL pushes; virtual NPCs carry hashed
+; UUIDs like 6D247B5D915BC6C7, NOT a 0x1000000-range id, so there is nothing to scan here). Otherwise
+; resolve the actor and return its UUID; "" if unresolved.
+String Function EntityUuid(String token)
+    If token == ""
+        Return ""
+    EndIf
+    If IsVEToken(token)
+        Return StringUtil.SubString(token, 3)
+    EndIf
+    Actor a = ResolveTarget(token)
+    If a
+        Return SkyrimNetApi.GetEntityUUID(a)
+    EndIf
+    Return ""
+EndFunction
+
+; Route say/narrate/transform/think/prompt when a virtual entity is speaker or target, via the
+; *ByUUID calls. Mixed actor<->VE pairings work because every side is reduced to a UUID.
+Function HandleVEAction(String action, String spTok, String tgTok, Bool xform, String text)
+    Actor pl = Game.GetPlayer()
+    String spUuid = EntityUuid(spTok)
+    String tUuid  = EntityUuid(tgTok)
+    String origUuid = spUuid
+    If origUuid == ""
+        origUuid = SkyrimNetApi.GetEntityUUID(pl)   ; no explicit speaker -> the player performs
+    EndIf
+
+    ; Player speaking TO a virtual entity.
+    If action == "say" && (spTok == "" || spTok == "player" || spTok == "Player")
+        ; We CANNOT register dialogue addressed *to* a VE -- the engine forbids a non-virtual speaker
+        ; targeting a VE listener and purges it to an ephemeral "X says to <VE>, verbatim" narration.
+        ; But a GENERAL player line (no listener) IS accepted and renders as a normal first-person
+        ; "Prisoner: <line>" -- real dialogue, NOT narration -- and it PERSISTS. So register that, voice
+        ; it, then force THIS VE to answer: the empty-content nudge pins her as responder (proven), and
+        ; because the line is now in context (not purged) she answers the actual request.
+        If xform
+            SkyrimNetApi.TransformDialogue(text)               ; LLM rephrases; the PC speaks it (also registers)
+        Else
+            SkyrimNetApi.RegisterDialogueByUUID(origUuid, text); "Prisoner: <line>" -- real dialogue, persists
+            SkyrimNetApi.TriggerPlayerTTS(text)                ; the PC actually says it aloud
+        EndIf
+        If IsVEToken(tgTok) && tUuid != ""
+            SkyrimNetApi.DirectNarrationByUUID("", tUuid, "")  ; force THIS VE to answer the line now
+        EndIf
+        Return
+    EndIf
+
+    If action == "prompt"
+        SkyrimNetApi.DirectNarrationByUUID("", origUuid, "")   ; nudge the originator to speak now
+        Return
+    EndIf
+
+    If action == "think"
+        ; Literal thought on the primary (speaker else target). LLM-think (GenerateNPCThought) has no
+        ; ByUUID variant, so only the verbatim thought is supported for a virtual entity.
+        String thinker = spUuid
+        If thinker == ""
+            thinker = tUuid
+        EndIf
+        If thinker != "" && text != ""
+            String nm = SkyrimNetApi.GetEntityDisplayNameByUUID(thinker)
+            String data = "{\"npc_name\":\"" + EscapeJson(nm) + "\",\"thoughts\":\"" + EscapeJson(text) + "\"}"
+            SkyrimNetApi.RegisterEventByUUID("npc_thoughts", data, thinker, "")
+        EndIf
+        Return
+    EndIf
+
+    ; say / narrate / transform -> a direct narration from the originator (voiced in its voice).
+    String content = text
+    If action == "say"
+        String spName = SkyrimNetApi.GetEntityDisplayNameByUUID(origUuid)
+        String mode = "verbatim"
+        If xform
+            mode = "rephrased"
+        EndIf
+        If tUuid != ""
+            String tgName = SkyrimNetApi.GetEntityDisplayNameByUUID(tUuid)
+            content = spName + " says to " + tgName + ", " + mode + ": \"" + text + "\""
+        Else
+            content = spName + " says, " + mode + ": \"" + text + "\""
+        EndIf
+    EndIf
+    SkyrimNetApi.DirectNarrationByUUID(content, origUuid, tUuid)
 EndFunction
 
 ; "player" -> the player; "0x...." -> resolve the runtime FormID (SKSE GetFormEx
