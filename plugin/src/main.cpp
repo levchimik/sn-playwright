@@ -76,6 +76,13 @@ namespace
     // nearby-actors so our cast == SkyrimNet's "available to speak with" set.
     std::atomic<float> g_awarenessMult{2.0f};      // interaction.nearbyNPCAwarenessMultiplier
 
+    // GameMaster + world-event-reaction state, mirrored from SkyrimNet config so the panel
+    // pills show the real on/off (and stay correct even when toggled via SkyrimNet's own
+    // hotkeys). GameMaster: game-config gamemaster.enabled. NPC reactions: Events-config
+    // global.npcReactionsEnabled. Defaults match SkyrimNet's stock (both on).
+    std::atomic<bool> g_gamemasterOn{true};    // gamemaster.enabled
+    std::atomic<bool> g_npcReactionsOn{true};  // Events global.npcReactionsEnabled
+
     // Snapshot of SkyrimNet's nearby/addressable cast (from /game-data?api=nearby-actors), refreshed
     // off-thread. This is the set SkyrimNet treats as in-scene (awareness radius + ActorFilter; NO
     // line-of-sight filtering -- occluded-but-nearby NPCs stay, matching "available to speak with").
@@ -173,10 +180,10 @@ namespace
 
     // Boolean variant: 1 = true, 0 = false, returns `fallback` if absent. Accepts JSON
     // true/false or 1/0.
-    int JsonBool(const std::string& j, const char* key, int fallback)
+    int JsonBool(const std::string& j, const char* key, int fallback, size_t from = 0)
     {
         const std::string needle = std::string("\"") + key + "\"";
-        const size_t k = j.find(needle);
+        const size_t k = j.find(needle, from);
         if (k == std::string::npos) {
             return fallback;
         }
@@ -832,6 +839,10 @@ namespace
         json += g_pauseGame ? "true" : "false";
         json += ",\"whisper\":";
         json += g_whisperOn.load() ? "true" : "false";
+        json += ",\"gamemaster\":";
+        json += g_gamemasterOn.load() ? "true" : "false";
+        json += ",\"npcReactions\":";
+        json += g_npcReactionsOn.load() ? "true" : "false";
         // Telepathy: the player perceives NPC thoughts only with a SkyrimNet Telepathy perk
         // (basic or canonical). The view uses this to show/hide npc_thoughts in the log.
         json += ",\"telepathy\":";
@@ -936,6 +947,7 @@ namespace
     // the awareness radius (and honour whisper) internally. Runs off the main thread (HTTP), then pulls the
     // scene + PushData()s so the view picks up the fresh radius, whisper pill, and cast list.
     constexpr const char* CONFIG_GAME_PATH = "/config?api=get&name=game";
+    constexpr const char* CONFIG_EVENTS_PATH = "/config?api=get&name=Events";
     constexpr const char* GM_STATUS_PATH = "/?api=gamemaster-status";
 
     void FetchConfigAsync()
@@ -958,6 +970,25 @@ namespace
                 if (mult > 0.0f) {
                     g_awarenessMult.store(mult);
                 }
+                // GameMaster on/off lives in the same game-config blob. "enabled" recurs in
+                // many sections (narration, spatialAudio, dbvo...), so scope the search to the
+                // "gamemaster" object to read gamemaster.enabled specifically.
+                const size_t gp = cfg.find("\"gamemaster\"");
+                if (gp != std::string::npos) {
+                    const int en = JsonBool(cfg, "enabled", -1, gp);
+                    if (en >= 0) {
+                        g_gamemasterOn.store(en == 1);
+                    }
+                }
+            }
+            // (1b) NPC world-event reactions live in the Events config group (global section).
+            const std::string ev = HttpRequest(L"GET", CONFIG_EVENTS_PATH, "");
+            if (!ev.empty()) {
+                const size_t gp = ev.find("\"global\"");
+                const int en = JsonBool(ev, "npcReactionsEnabled", -1, (gp == std::string::npos) ? 0 : gp);
+                if (en >= 0) {
+                    g_npcReactionsOn.store(en == 1);
+                }
             }
             // (2) Live whisper on/off -- the runtime toggle only shows up here, not in /config.
             const std::string gm = HttpRequest(L"GET", GM_STATUS_PATH, "");
@@ -969,9 +1000,10 @@ namespace
             }
             // Effective range follows the live state, using the static radii.
             g_interactRadius.store(g_whisperOn.load() ? g_whisperDist.load() : g_normalDist.load());
-            logger::info("interaction: normal={} whisper={} whisper_mode={} -> radius={}",
+            logger::info("interaction: normal={} whisper={} whisper_mode={} -> radius={} | gamemaster={} npcReactions={}",
                          g_normalDist.load(), g_whisperDist.load(),
-                         g_whisperOn.load() ? "ON" : "off", g_interactRadius.load());
+                         g_whisperOn.load() ? "ON" : "off", g_interactRadius.load(),
+                         g_gamemasterOn.load() ? "ON" : "off", g_npcReactionsOn.load() ? "ON" : "off");
             FetchSceneBlocking();  // pull SkyrimNet's nearby/addressable cast
             PushData();
         }).detach();
@@ -1555,9 +1587,12 @@ namespace
     {
         const std::string s = a_arg ? a_arg : "";
         logger::info("JS command -> {}", s.empty() ? "(null)" : s.c_str());
-        // These three no-op while the panel holds focus -- fire them with focus briefly released.
+        // These no-op while the panel holds focus (they're SkyrimNet "simulate the hotkey"
+        // natives, gated on menu state) -- fire them with focus briefly released. gamemaster /
+        // npcreact / continarrate are the same class as whisper/interrupt/continuous.
         const std::string action = s.substr(0, s.find('|'));
-        if (action == "whisper" || action == "interrupt" || action == "continuous") {
+        if (action == "whisper" || action == "interrupt" || action == "continuous" ||
+            action == "gamemaster" || action == "npcreact" || action == "continarrate") {
             FireUnfocused(s);
             return;
         }

@@ -132,6 +132,8 @@
     color:var(--muted);cursor:pointer;white-space:nowrap;
   }
   .pill.on{color:#1a1a1a;background:var(--accent);border-color:var(--accent);font-weight:600;}
+  /* Thin vertical separator between pill groups (toggles | AI-director | one-shots | log). */
+  .pilldiv{width:1px;align-self:stretch;margin:2px 1px;background:var(--line);}
   /* Small square header buttons (+ pause, ? help) sitting next to the × close. */
   .hbtn{cursor:pointer;color:var(--muted);font-size:calc(15px*var(--fs));line-height:1;padding:2px 8px;border-radius:6px;border:1px solid var(--line);font-weight:700;}
   .hbtn:hover{color:var(--accent);border-color:var(--accent);}
@@ -296,11 +298,21 @@
     <div id="helpBtn" class="hbtn" onclick="toggleHelp()" title="Keyboard controls">?</div>
     <div class="closebtn" onclick="closePanel()">&#10005;</div>
     <div class="pillbar">
+      <!-- Group 1: scene/session toggles (Playwright-local + whisper range) -->
       <div id="dirPill" class="pill" onclick="toggleDirector()">Director: off</div>
       <div id="whisperPill" class="pill" onclick="toggleWhisper()" title="Mirrors SkyrimNet's whisper mode: narrows the interaction range (who hears / is in the scene) from the normal radius to the whisper radius. Reflects SkyrimNet's real state, even if you toggled it with SkyrimNet's own hotkey.">Whisper: off</div>
       <div id="pausePill" class="pill" onclick="togglePause()">Pause: off</div>
-      <div id="interruptPill" class="pill" onclick="interruptDialogue()" title="Cut off all in-progress NPC speech and pending generation right now (mirrors SkyrimNet's interrupt-dialogue hotkey). Hotkey: -">Interrupt</div>
+      <div class="pilldiv"></div>
+      <!-- Group 2: SkyrimNet AI-director toggles (Auto needs GameMaster, so kept adjacent) -->
+      <div id="gmPill" class="pill" onclick="toggleGameMaster()" title="Toggle SkyrimNet's GameMaster agent — the director that narrates scenes, drives autonomous NPC dialogue, and runs continuous mode. Mirrors SkyrimNet's real state (config-backed), even if toggled via its own hotkey.">GameMaster: on</div>
       <div id="contPill" class="pill" onclick="toggleContinuous()" title="Toggle SkyrimNet continuous (autonomous-scene) mode — NPCs keep talking on their own after you interact. Requires GameMaster to be enabled in SkyrimNet to actually run. Hotkey: ,">Auto: off</div>
+      <div id="npcReactPill" class="pill" onclick="toggleNpcReactions()" title="Toggle whether NPCs react to world events (other NPCs' dialogue, combat, death, quest stages…). Off = no interjections or interruptions. Mirrors SkyrimNet's real state (config-backed).">NPC React: on</div>
+      <div class="pilldiv"></div>
+      <!-- Group 3: momentary one-shots -->
+      <div id="interruptPill" class="pill" onclick="interruptDialogue()" title="Cut off all in-progress NPC speech and pending generation right now (mirrors SkyrimNet's interrupt-dialogue hotkey). Hotkey: -">Interrupt</div>
+      <div id="contNarratePill" class="pill" onclick="continueNarration()" title="Continue narration — nudge SkyrimNet's speaker selector to carry the scene forward (mirrors SkyrimNet's continue-narration hotkey). One-shot.">Continue</div>
+      <div class="pilldiv"></div>
+      <!-- Group 4: panel -->
       <div id="logPill" class="pill" onclick="toggleLog()">Log</div>
     </div>
   </header>
@@ -845,7 +857,7 @@
     document.getElementById("dot").classList.toggle("on", (v==="1"||v===1||v===true));
   };
 
-  var state = { npcs:[], speaker:null, speakerName:"You", target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false, continuous:false, telepathy:true };
+  var state = { npcs:[], speaker:null, speakerName:"You", target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false, continuous:false, telepathy:true, gamemaster:true, npcReactions:true };
   try{ state.transform = localStorage.getItem("pwTransform")==="1"; }catch(e){}
 
   // --- Text scale (font-only) -----------------------------------------------
@@ -1199,11 +1211,14 @@
       // which jitters every poll. Lets the 1 Hz poll skip the DOM rebuild when nothing meaningful
       // changed, so an open ⋯ menu / selection survives while you reposition.
       var sig = (d.directorMode?1:0)+"|"+(d.pauseGame?1:0)+"|"+(d.whisper?1:0)+"|"+
+                (d.gamemaster?1:0)+"|"+(d.npcReactions?1:0)+"|"+
                 npcs.map(function(n){return n.id+":"+n.state+":"+n.dist+(n.player?"P":"")+(n.follower?"F":"")+(n.pinned?"X":"");}).join(",");
       state.npcs = npcs;
       state.director = !!d.directorMode;
       state.pause = !!d.pauseGame;
       state.whisper = !!d.whisper;
+      if("gamemaster" in d) state.gamemaster = !!d.gamemaster;       // SkyrimNet GameMaster agent on/off (config-mirrored)
+      if("npcReactions" in d) state.npcReactions = !!d.npcReactions; // NPC reactions to world events on/off (config-mirrored)
       state.telepathy = ("telepathy" in d) ? !!d.telepathy : true;  // player owns a SkyrimNet Telepathy perk -> log shows NPC thoughts
       state.radius = d.radius;   // meters; for the pill tooltip / label
       // Drop a selected speaker/target once they leave the nearby cast (walked off / unloaded).
@@ -1250,6 +1265,14 @@
     wp.textContent = "Whisper: " + (state.whisper ? "on" : "off");
     wp.className = "pill" + (state.whisper ? " on" : "");
     if(state.radius != null) wp.title = "Mirrors SkyrimNet's whisper mode. Interaction range now ~" + state.radius + " m (who hears / is in the scene). Toggle to switch normal ↔ whisper; reflects SkyrimNet's real state even if toggled via its own hotkey.";
+
+    var gm = document.getElementById("gmPill");
+    gm.textContent = "GameMaster: " + (state.gamemaster ? "on" : "off");
+    gm.className = "pill" + (state.gamemaster ? " on" : "");
+
+    var nr = document.getElementById("npcReactPill");
+    nr.textContent = "NPC React: " + (state.npcReactions ? "on" : "off");
+    nr.className = "pill" + (state.npcReactions ? " on" : "");
 
     closeCtxMenu();   // any open action menu is stale once the list re-renders
     var box = document.getElementById("npcs");
@@ -1368,9 +1391,19 @@
       d.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); quickFire(act, n); };
       m.appendChild(d);
     });
-    // Built-in: the SkyrimNet action launcher for this actor (always present, after the
-    // data-driven items). Opens a persistent, per-actor window (see the launcher module).
+    // Built-in capabilities for this actor (always present, after the data-driven items).
     var sep = document.createElement("div"); sep.className = "ctxsep"; m.appendChild(sep);
+    // Think to Self: autonomous thought from SkyrimNet's LLM (NPC -> GenerateNPCThought,
+    // player row -> TriggerPlayerThought). Only meaningful while awake. quickFire sends
+    // "musethink|<id>|", so the target resolves to this exact actor.
+    if(n.state !== "asleep" && n.state !== "sleeptalk"){
+      var dm = document.createElement("div");
+      dm.className = "ctxitem";
+      dm.textContent = n.player ? "Think to Self (you)" : "Think to Self";
+      dm.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); quickFire("musethink", n); };
+      m.appendChild(dm);
+    }
+    // The SkyrimNet action launcher for this actor: opens a persistent, per-actor window.
     var da = document.createElement("div");
     da.className = "ctxitem ctxaction";
     da.textContent = "Actions…";
@@ -1493,6 +1526,28 @@
     send("continuous||");
     state.continuous = !state.continuous;
     render();
+  }
+
+  // GameMaster + NPC reactions are SkyrimNet globals mirrored from its config. Fire the
+  // toggle, flip optimistically, then let the config re-fetch report the real state back.
+  function toggleGameMaster(){
+    send("gamemaster||");
+    state.gamemaster = !state.gamemaster;
+    render();
+    scheduleRefresh();
+  }
+  function toggleNpcReactions(){
+    send("npcreact||");
+    state.npcReactions = !state.npcReactions;
+    render();
+    scheduleRefresh();
+  }
+
+  // One-shot: continue narration (no state). Flash the pill for feedback, like Interrupt.
+  function continueNarration(){
+    send("continarrate||");
+    var p = document.getElementById("contNarratePill");
+    if(p){ p.classList.add("on"); setTimeout(function(){ p.classList.remove("on"); }, 220); }
   }
 
   function closePanel(){ window.pwClose(""); }

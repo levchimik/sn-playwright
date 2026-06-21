@@ -313,25 +313,58 @@ Event OnUpdate()
 EndEvent
 
 ; ------------------------------------------------------------------ narrate
-; Voice a scene event through a nearby NPC. preferred = the NPC to voice it (the panel's
-; selected target); None falls back to a random nearby NPC. Works in or out of Director
-; Mode (DirectNarration with an NPC originator + no target).
+; Voice a scene event.
+;   - A named/profiled NPC nearby (or the panel pick) -> DirectNarration addressing it as the
+;     TARGET (no originator): it perceives, may react (named), and the player sees it. The
+;     good case (verified: event 376).
+;   - No named NPC (only an unknown/profile-less actor, or just the player) -> fall back to a
+;     RegisterPersistentEvent: it registers WITHOUT forcing a reaction, so there is no
+;     nameless reply. Associate a nearby unknown actor if there is one; otherwise a general
+;     world note. (DirectNarration with an unknown originator WOULD make it react namelessly,
+;     which is exactly what we're avoiding.)
+; The player is never the target (so never pulled in to react; Director Mode's blacklist also
+; keeps the player out of the audience). Search radius = SkyrimNet's live interaction range
+; (interaction.maxDistance: normal vs whisper), so reach tracks your current talk distance.
 Function NarrateText(String narration, Actor preferred)
-    Actor pl = Game.GetPlayer()
-    Actor speaker = preferred
-    Int tries = 0
-    While (!speaker || speaker == pl) && tries < 6
-        speaker = Game.FindRandomActorFromRef(pl, 1500.0)
-        tries += 1
-    EndWhile
-    If !speaker || speaker == pl
-        Debug.Notification("No NPC nearby to perceive the narration")
+    If narration == ""
         Return
     EndIf
-    If narration != ""
-        SkyrimNetApi.DirectNarration(narration, speaker, None)
-        Debug.Notification("Narrated via " + speaker.GetDisplayName())
+    Actor pl = Game.GetPlayer()
+    Actor named = preferred                                    ; panel pick = the named target
+    If named == pl
+        named = None                                           ; never the player
     EndIf
+    Actor fallback = None                                      ; CLOSEST nearby actor (originator if no named one)
+    If !named
+        Float radius = SkyrimNetApi.GetConfigFloat("game", "interaction.maxDistance", 1600.0)
+        Float bestDist = 0.0
+        Int tries = 0
+        ; Sample the area; FindRandomActorFromRef is random, so take several and keep the
+        ; CLOSEST -- a too-distant originator (another room) isn't perceived by the player,
+        ; whereas SkyrimNet's own silent narration picks a near NPC.
+        While !named && tries < 12
+            Actor cand = Game.FindRandomActorFromRef(pl, radius)
+            If cand && cand != pl
+                Float dist = pl.GetDistance(cand)
+                If !fallback || dist < bestDist
+                    fallback = cand                           ; keep the closest sampled actor
+                    bestDist = dist
+                EndIf
+                String uuid = SkyrimNetApi.GetEntityUUID(cand)
+                If uuid != "" && !SkyrimNetApi.IsVirtualEntity(uuid) && SkyrimNetApi.GetEntityDisplayNameByUUID(uuid) != ""
+                    named = cand                               ; a named/profiled NPC
+                EndIf
+            EndIf
+            tries += 1
+        EndWhile
+    EndIf
+    If named
+        SkyrimNetApi.DirectNarration(narration, None, named)            ; named NPC as TARGET -> visible, named reaction
+    Else
+        ; No named NPC -> persistent event (no reaction = no nameless reply); fallback may be None.
+        SkyrimNetApi.RegisterPersistentEvent(narration, fallback, None)
+    EndIf
+    Debug.Notification("Narrated")
 EndFunction
 
 ; System/meta event (panel "System" button): inject a neutral context note that NPCs
@@ -627,6 +660,23 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
         EndIf
         If t && actName != ""
             SkyrimNetApi.ExecuteAction(actName, t, argsJson)
+        EndIf
+    ElseIf action == "gamemaster"
+        SkyrimNetApi.TriggerToggleGameMaster()           ; global: GameMaster agent on/off (config-backed)
+    ElseIf action == "npcreact"
+        SkyrimNetApi.TriggerToggleWorldEventReactions()  ; global: NPC reactions to world events on/off
+    ElseIf action == "continarrate"
+        SkyrimNetApi.TriggerContinueNarration()          ; global: let the speaker selector continue the scene
+    ElseIf action == "musethink"
+        ; Autonomous "think to self" (no text): SkyrimNet's LLM invents the thought from
+        ; current scene context. NPC -> GenerateNPCThought (skips dead/sleeping silently);
+        ; player (or no actor selected) -> TriggerPlayerThought.
+        If primary && primary != pl
+            SkyrimNetApi.GenerateNPCThought(primary, "")
+            Debug.Notification(primary.GetDisplayName() + " is thinking...")
+        Else
+            SkyrimNetApi.TriggerPlayerThought()
+            Debug.Notification("Thinking to yourself...")
         EndIf
     EndIf
 EndFunction
