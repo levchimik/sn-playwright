@@ -161,6 +161,41 @@
   #settings .chead{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);cursor:move;}
   #settings .chead .title{flex:1;font-size:calc(14px*var(--fs));letter-spacing:2px;color:var(--accent);font-weight:600;}
   #settings .cbody{overflow-y:auto;padding:6px 4px 14px;}
+  /* Action launcher windows (one per actor, persistent, draggable). */
+  .actionwin{position:fixed;width:330px;min-width:280px;min-height:240px;max-height:92vh;background:rgba(14,14,18,0.97);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;pointer-events:auto;box-shadow:0 14px 44px rgba(0,0,0,0.6);}
+  body:not(.open) .actionwin{display:none;}
+  .awresize{position:absolute;right:0;bottom:0;width:20px;height:20px;cursor:nwse-resize;z-index:7;pointer-events:auto;}
+  .awresize::after{content:"";position:absolute;right:3px;bottom:3px;width:9px;height:9px;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);opacity:0.55;border-bottom-right-radius:3px;}
+  .awfulldesc{padding:8px 12px 10px;font-size:calc(12px*var(--fs));line-height:1.4;color:var(--muted);border-bottom:1px solid var(--line);}
+  .awhead{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);cursor:move;}
+  .awtitle{flex:1;font-size:calc(13px*var(--fs));letter-spacing:1px;color:var(--accent);font-weight:600;}
+  .awx{cursor:pointer;color:var(--muted);font-size:calc(15px*var(--fs));line-height:1;padding:2px 6px;}
+  .awx:hover{color:var(--accent);}
+  .awbody{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column;}
+  .awsearch{padding:8px 10px;position:sticky;top:0;z-index:2;background:rgba(14,14,18,0.98);}
+  .awq,.awinput{width:100%;background:var(--bg2);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:7px 9px;font-size:calc(12px*var(--fs));box-sizing:border-box;}
+  .awlist{display:flex;flex-direction:column;}
+  .awrow{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid rgba(255,255,255,0.05);cursor:pointer;}
+  .awrow:hover{background:var(--bg2);}
+  .awrowmain{flex:1;min-width:0;}
+  .awname{font-size:calc(13px*var(--fs));color:var(--fg);}
+  .awdesc{font-size:calc(11px*var(--fs));color:var(--muted);}
+  .awbadge{font-size:calc(10px*var(--fs));padding:1px 7px;border-radius:8px;background:rgba(127,168,214,0.18);color:var(--accent2);white-space:nowrap;}
+  .awempty{padding:14px 12px;color:var(--muted);font-size:calc(12px*var(--fs));text-align:center;font-style:italic;}
+  .awback{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2;background:rgba(14,14,18,0.98);}
+  .awbacklink{cursor:pointer;color:var(--accent2);font-size:calc(12px*var(--fs));}
+  .awformtitle{flex:1;font-size:calc(13px*var(--fs));color:var(--accent);font-weight:600;}
+  .awform{padding:4px 0 10px;}
+  .awfield{padding:7px 12px;}
+  .awlabel{font-size:calc(11px*var(--fs));color:var(--muted);margin-bottom:4px;}
+  .awhint{color:var(--accent2);}
+  .awchip{display:inline-block;background:rgba(201,161,74,0.20);color:var(--accent);font-size:calc(12px*var(--fs));padding:4px 9px;border-radius:8px;font-weight:500;}
+  .awsel{width:100%;background:var(--bg2);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:6px 8px;font-size:calc(12px*var(--fs));}
+  .awexecbar{display:flex;justify-content:flex-end;padding:8px 12px 12px;}
+  .awexec{background:var(--accent);color:#1a1a1a;border:0;border-radius:7px;padding:8px 16px;font-weight:600;font-size:calc(12px*var(--fs));cursor:pointer;}
+  .awexec:hover{filter:brightness(1.08);}
+  .ctxsep{height:1px;background:var(--line);margin:4px 6px;}
+  .ctxaction{color:var(--accent);}
   #controls .chead{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);cursor:move;}
   #controls .chead .title{flex:1;font-size:calc(14px*var(--fs));letter-spacing:2px;color:var(--accent);font-weight:600;}
   #controls .cbody{overflow-y:auto;padding:6px 4px 10px;}
@@ -374,6 +409,9 @@
   window.pwLogFetch  = window.pwLogFetch  || function(){};
   window.pwLogEdit   = window.pwLogEdit   || function(){};
   window.pwLogDelete = window.pwLogDelete || function(){};
+  window.pwActionsFetch    = window.pwActionsFetch    || function(){};
+  window.pwActionsEligible = window.pwActionsEligible || function(){};
+  window.pwTemplateFetch   = window.pwTemplateFetch   || function(){};
 
   // Called by C++ (InteropCall) to expand the full panel or collapse to the dot.
   window.pwSetOpen = function(v){
@@ -841,6 +879,288 @@
   }
   function setOpacity(pct){ opacity = pct/100; applyOpacity(); }
   applyOpacity();
+
+  // --- Action launcher -------------------------------------------------------
+  // Fires SkyrimNet *registered actions* from the panel. The DLL fetches the action
+  // registry (/actions?api=actions) and per-actor eligibility (/actions?api=eligibility)
+  // over SkyrimNet's REST API and pushes them here; execution rides the normal command
+  // bridge -> PW_Controller -> SkyrimNetApi.ExecuteAction. Windows are a FACTORY (not a
+  // singleton): multiple at once, one per actor, persistent until their ×.
+  var pwActions = null;        // cached registry (array) or null until first fetch returns
+  var pwActionsLoading = false;
+  var actionWins = {};         // open windows, keyed by originator token (n.id)
+  var actionZ = 10050;         // z-index counter for bring-to-front
+  var awLastSize = null;       // {w,h} of the last resized window -> new windows reuse it
+
+  window.pwSetActions = function(json){
+    pwActionsLoading = false;
+    try{ var p = JSON.parse(json); pwActions = Array.isArray(p) ? p : (p && (p.actions||p.data||p.items)) || []; }
+    catch(e){ pwActions = []; }
+    Object.keys(actionWins).forEach(function(k){ actionWins[k].renderList(); });
+  };
+  // payload = "<token>\t<eligibility-json>". Response shape is probe-pending; we accept an
+  // array of names or {actions|eligible:[...]} and otherwise leave the window showing all.
+  window.pwSetEligible = function(payload){
+    var tab = (payload||"").indexOf("\t");
+    var tok = tab<0 ? payload : payload.slice(0, tab);
+    var body = tab<0 ? "" : payload.slice(tab+1);
+    var names = null;
+    try{ var p = JSON.parse(body);
+      var arr = Array.isArray(p) ? p : (p.actions || p.eligible || p.names || null);
+      if(Array.isArray(arr)) names = arr.map(function(x){ return (typeof x==="string") ? x : (x && (x.name||x.actionName)); });
+    }catch(e){}
+    var w = actionWins[tok];
+    if(w) w.setEligible(names);
+  };
+
+  // Normalize one parameter (from parameterMapping OR a parameterSchema {name:type}) to a
+  // common shape. `type` in a parameterMapping entry is the MAPPING (speaker/target/dynamic/
+  // static); the value type, if given, rides on valueType/dataType. Defensive by design.
+  function pwNormParam(p){
+    var raw = (p.type||"").toString().toLowerCase();
+    var mapping = "", type = "";
+    if(raw==="speaker"||raw==="target"||raw==="dynamic"||raw==="static"){
+      mapping = raw; type = (p.valueType||p.dataType||p.paramType||"").toString().toLowerCase();
+    } else { type = raw; }
+    var opts = p.allowedValues || p.options || p.enum || (Array.isArray(p.values)?p.values:null);
+    if(opts && !opts.length) opts = null;
+    if(!type && opts) type = "enum";
+    return { name:p.name||"", mapping:mapping, type:type, desc:p.description||p.desc||"", options:opts,
+             value:p.value, nearby:!!(p.useNearbyActors||p.useNearbyActor),
+             def:(p.default!==undefined && p.default!==null ? p.default : ""), optional:!!p.optional };
+  }
+  function pwActionParams(a){
+    var src = a.parameter_mapping || a.parameterMapping || a.parameters || a.params || null, out = [];
+    if(Array.isArray(src)){ src.forEach(function(p){ out.push(pwNormParam(p)); }); return out; }
+    var sch = a.parameterSchema;
+    if(typeof sch==="string"){ try{ sch = JSON.parse(sch); }catch(e){ sch = null; } }
+    if(sch && typeof sch==="object" && !Array.isArray(sch)){
+      Object.keys(sch).forEach(function(k){ out.push(pwNormParam({ name:k, type:sch[k] })); });
+    }
+    return out;
+  }
+  function pwActionName(a){ return a.name || a.actionName || a.id || "?"; }
+  function pwClip(s, n){ s = String(s||""); return s.length > n ? s.slice(0, n-1).replace(/\s+$/,"") + "…" : s; }
+
+  // Templated descriptions: many actions' description is just {{render_template("X")}}.
+  // The /actions API returns it unrendered, so we fetch X's source (DLL -> prompts API) and
+  // strip the Jinja for a readable approximation. Perfect per-actor rendering needs
+  // SkyrimNet's engine; this is the human-facing gist.
+  var pwTemplates = {};        // path -> cleaned text
+  var pwTemplatePend = {};     // path -> in-flight fetch
+  function pwStripJinja(s){
+    s = String(s||"");
+    s = s.replace(/\{%[^]*?%\}/g, "");                            // drop {% set/if/for ... %}
+    s = s.replace(/\{\{\s*[\w.]*\.name\s*\}\}/g, "The speaker");  // name vars -> generic
+    s = s.replace(/\{\{[^]*?\}\}/g, "");                          // drop remaining {{ ... }}
+    return s.replace(/\s+/g, " ").trim();
+  }
+  function pwResolveDesc(desc){
+    desc = String(desc||"");
+    if(desc.indexOf("{{") < 0) return desc;
+    return desc.replace(/\{\{\s*render_template\(\s*["']([^"']+)["']\s*\)\s*\}\}/g, function(m, path){
+      if(pwTemplates[path] !== undefined) return pwTemplates[path];
+      if(!pwTemplatePend[path]){ pwTemplatePend[path] = 1; window.pwTemplateFetch(path); }
+      return "…";   // placeholder until the template arrives, then windows re-render
+    }).replace(/\{%[^]*?%\}/g, "").replace(/\{\{[^]*?\}\}/g, "").replace(/\s+/g, " ").trim();
+  }
+  window.pwSetTemplate = function(payload){
+    var tab = (payload||"").indexOf("\t"); if(tab < 0) return;
+    var path = payload.slice(0, tab), body = payload.slice(tab+1), content = "";
+    try{ content = (JSON.parse(body).content) || ""; }catch(e){ content = body; }
+    pwTemplates[path] = pwStripJinja(content);
+    delete pwTemplatePend[path];
+    Object.keys(actionWins).forEach(function(k){ if(actionWins[k].refresh) actionWins[k].refresh(); });
+  };
+
+  function openActionWindow(n){
+    if(!n || !n.id) return;
+    if(actionWins[n.id]){ actionWins[n.id].focus(); return; }    // one per actor -> focus existing
+    if(pwActions === null && !pwActionsLoading){ pwActionsLoading = true; window.pwActionsFetch(); }   // lazy first fetch
+    window.pwActionsEligible(n.id + "|" + (n.uuid||""));
+
+    var win = document.createElement("div");
+    win.className = "actionwin";
+    var off = (Object.keys(actionWins).length % 6) * 26;
+    win.style.left = (90 + off) + "px"; win.style.top = (70 + off) + "px"; win.style.zIndex = (++actionZ);
+    if(awLastSize){ win.style.width = awLastSize.w + "px"; win.style.height = awLastSize.h + "px"; }
+    win.innerHTML =
+      '<div class="awhead"><span class="awtitle"></span><span class="awx" title="Close">&#10005;</span></div>' +
+      '<div class="awbody"></div>' +
+      '<div class="awresize" title="Drag to resize"></div>';
+    document.body.appendChild(win);
+    win.querySelector(".awtitle").textContent = "Actions · " + (n.name||"").replace(" (you)","");
+
+    var body = win.querySelector(".awbody");
+    var eligible = null;   // null = show all (pending / unsupported)
+
+    // Focusing a field must enter the DLL's "typing" mode (swallows keys + pauses) so
+    // keystrokes don't leak to the game; clearTyping handles a field still focused when
+    // its DOM is torn down (a blur the DLL might otherwise miss), like the log editor.
+    function wireTyping(el){ el.addEventListener("focus",function(){ window.pwConfig("typing|1"); }); el.addEventListener("blur",function(){ window.pwConfig("typing|0"); }); }
+    function clearTyping(){ var ae=document.activeElement; if(ae && win.contains(ae) && (ae.tagName==="INPUT"||ae.tagName==="SELECT"||ae.tagName==="TEXTAREA")) window.pwConfig("typingEnd|1"); }
+    function close(){ clearTyping(); win.remove(); delete actionWins[n.id]; }
+    function focus(){ win.style.zIndex = (++actionZ); }
+    win.addEventListener("pointerdown", focus);
+    win.querySelector(".awx").onclick = function(e){ e.stopPropagation(); close(); };
+
+    (function(){   // drag by the header (pointer-capture, same as the other windows)
+      var head = win.querySelector(".awhead"), dr=false, ox=0, oy=0;
+      head.addEventListener("pointerdown", function(e){
+        if(e.target.closest(".awx")) return;
+        dr=true; ox=e.clientX-win.offsetLeft; oy=e.clientY-win.offsetTop;
+        try{ head.setPointerCapture(e.pointerId); }catch(_){}
+        e.preventDefault();
+      });
+      head.addEventListener("pointermove", function(e){
+        if(!dr) return;
+        win.style.left = Math.max(0, Math.min(e.clientX-ox, window.innerWidth - win.offsetWidth)) + "px";
+        win.style.top  = Math.max(0, Math.min(e.clientY-oy, window.innerHeight - 40)) + "px";
+      });
+      head.addEventListener("pointerup", function(){ dr=false; });
+    })();
+
+    (function(){   // resize from the corner grip; remember the size for the next window
+      var rz = win.querySelector(".awresize"); if(!rz) return;
+      var rzing=false, sw=0, sh=0, sx=0, sy=0;
+      rz.addEventListener("pointerdown", function(e){
+        rzing=true; sw=win.offsetWidth; sh=win.offsetHeight; sx=e.clientX; sy=e.clientY;
+        try{ rz.setPointerCapture(e.pointerId); }catch(_){}
+        e.preventDefault(); e.stopPropagation();
+      });
+      rz.addEventListener("pointermove", function(e){
+        if(!rzing) return;
+        win.style.width  = Math.max(280, sw+(e.clientX-sx)) + "px";
+        win.style.height = Math.max(240, sh+(e.clientY-sy)) + "px";
+      });
+      rz.addEventListener("pointerup", function(){ if(!rzing) return; rzing=false; awLastSize={ w:win.offsetWidth, h:win.offsetHeight }; });
+    })();
+
+    function renderList(){
+      clearTyping();
+      body.innerHTML = '<div class="awsearch"><input class="awq" type="text" placeholder="Search actions…"></div><div class="awlist"></div>';
+      var qi = body.querySelector(".awq"); qi.value = body._q || ""; wireTyping(qi);
+      qi.oninput = function(){ body._q = qi.value; fillList(body.querySelector(".awlist")); };
+      fillList(body.querySelector(".awlist"));
+      function fillList(L){
+        var q = (body._q || "").toLowerCase();   // read fresh each keystroke (live filter)
+        L.innerHTML = "";
+        if(pwActions === null || pwActionsLoading){
+          L.innerHTML = '<div class="awempty">Loading actions…</div>'; return;
+        }
+        var list = pwActions.filter(function(a){
+          var nm = pwActionName(a);
+          if(a.enabled === false) return false;    // disabled actions can't fire -> hide
+          if(eligible && eligible.indexOf(nm) < 0) return false;
+          if(q && (nm + " " + (a.description||"")).toLowerCase().indexOf(q) < 0) return false;
+          return true;
+        });
+        if(!list.length){ L.innerHTML = '<div class="awempty">No matching actions.</div>'; return; }
+        list.forEach(function(a){
+          var row = document.createElement("div"); row.className = "awrow";
+          row.innerHTML = '<div class="awrowmain"><div class="awname">'+esc(pwActionName(a))+'</div><div class="awdesc">'+esc(pwClip(pwResolveDesc(a.description||""), 90))+'</div></div>';
+          row.onclick = function(){ renderForm(a); };
+          L.appendChild(row);
+        });
+        if(eligible === null){ var note=document.createElement("div"); note.className="awempty"; note.style.opacity=".6"; note.textContent="Showing all (eligibility pending)."; L.appendChild(note); }
+      }
+    }
+
+    function renderForm(a){
+      clearTyping();
+      body.innerHTML = '<div class="awback"><span class="awbacklink">&#8592; Back</span><span class="awformtitle"></span></div><div class="awform"></div>';
+      body.querySelector(".awbacklink").onclick = function(){ renderList(); };
+      body.querySelector(".awformtitle").textContent = pwActionName(a);
+      var form = body.querySelector(".awform");
+      var params = pwActionParams(a);
+      var getters = [];   // {name, get}
+
+      var rdesc = pwResolveDesc(a.description||""); if(rdesc){ var fd=document.createElement("div"); fd.className="awfulldesc"; fd.textContent=rdesc; form.appendChild(fd); }
+
+      var perf = document.createElement("div"); perf.className = "awfield";
+      perf.innerHTML = '<div class="awlabel">Performer &middot; speaker (auto)</div><span class="awchip">'+esc((n.name||"").replace(" (you)",""))+'</span>';
+      form.appendChild(perf);
+
+      // Categories (SUB_CATEGORY) don't execute a fixed action — they route through a
+      // SkyrimNet LLM drilldown that needs an `intent`. Render one intent field instead
+      // of the (empty) param form.
+      var isCategory = (a.category_name === "SUB_CATEGORY");
+      if(isCategory){
+        var cf = document.createElement("div"); cf.className = "awfield";
+        cf.innerHTML = '<div class="awlabel">intent <span class="awhint">&middot; describe the order; SkyrimNet picks the specific action</span></div>';
+        var ci = document.createElement("input"); ci.className = "awinput"; ci.placeholder = "e.g. tell them to wait here";
+        wireTyping(ci); cf.appendChild(ci); form.appendChild(cf);
+        getters.push({ name:"intent", get:function(){ return ci.value.trim(); } });
+      } else {
+      params.forEach(function(pm){
+        if(pm.mapping === "speaker") return;       // auto = originator
+        if(pm.mapping === "static") return;        // server-applied fixed value
+        var f = document.createElement("div"); f.className = "awfield";
+        var lab = document.createElement("div"); lab.className = "awlabel";
+        lab.innerHTML = esc(pm.name || "param") + (pm.desc ? ' <span class="awhint">&middot; '+esc(pm.desc)+'</span>' : "");
+        f.appendChild(lab);
+        var ctrl, get;
+        // Actor params: SkyrimNet never sets useNearbyActors in practice, so we lean on the
+        // Papyrus `ak*` convention (akActor/akTarget/akChallenger…). Every ak-prefixed param in
+        // the live registry is an actor reference (items/spells are passed by name, e.g.
+        // itemName), so this is the reliable signal -> render a cast dropdown.
+        var isActor = pm.nearby || pm.type === "actor" || pm.type === "form" || /^ak[A-Z]/.test(pm.name);
+        if(isActor){
+          // Editable combobox: a free-text <input> backed by a <datalist> of the nearby cast.
+          // Pick a suggested name OR type any actor name (SkyrimNet resolves by display name,
+          // and the target may be someone not in the local cast). Value = the string. Defaults
+          // to the current To target's name.
+          var dlId = "awdl_" + (n.id||"x").replace(/[^a-z0-9]/gi,"") + "_" + getters.length;
+          ctrl = document.createElement("input"); ctrl.className = "awinput"; ctrl.setAttribute("list", dlId);
+          ctrl.placeholder = pm.optional ? "optional — name" : "actor name";
+          var dl = document.createElement("datalist"); dl.id = dlId;
+          state.npcs.forEach(function(np){ var o = document.createElement("option"); o.value = (np.name||"").replace(" (you)",""); dl.appendChild(o); });
+          f.appendChild(dl);
+          if(state.targetName && state.targetName !== "none") ctrl.value = state.targetName;
+          get = function(){ return ctrl.value.trim(); };
+        } else if(pm.options){
+          ctrl = document.createElement("select"); ctrl.className = "awsel";
+          pm.options.forEach(function(v){ var o=document.createElement("option"); o.value=String(v); o.textContent=String(v); ctrl.appendChild(o); });
+          get = function(){ return ctrl.value; };
+        } else if(pm.type === "bool" || pm.type === "boolean"){
+          ctrl = document.createElement("select"); ctrl.className = "awsel";
+          ["true","false"].forEach(function(v){ var o=document.createElement("option"); o.value=v; o.textContent=v; ctrl.appendChild(o); });
+          get = function(){ return ctrl.value === "true"; };
+        } else {
+          ctrl = document.createElement("input");
+          ctrl.className = "awinput";
+          ctrl.type = (pm.type==="int"||pm.type==="float"||pm.type==="number"||pm.type==="integer") ? "number" : "text";
+          ctrl.placeholder = (pm.optional ? "optional" : (pm.type || "value"));
+          if(pm.def!=="" && pm.def!=null) ctrl.value = pm.def;
+          get = function(){
+            var v = ctrl.value;
+            if(ctrl.type==="number"){ if(v==="") return null; return v.indexOf(".")>=0 ? parseFloat(v) : parseInt(v,10); }
+            return v;
+          };
+        }
+        wireTyping(ctrl);
+        f.appendChild(ctrl);
+        form.appendChild(f);
+        getters.push({ name: pm.name, get: get });
+      });
+      }
+
+      var bar = document.createElement("div"); bar.className = "awexecbar";
+      var btn = document.createElement("button"); btn.className = "awexec"; btn.textContent = "Execute";
+      btn.onclick = function(){
+        var args = {};
+        getters.forEach(function(g){ if(g.name){ var v=g.get(); if(v!==null && v!==undefined && v!=="") args[g.name]=v; } });
+        send("execaction|" + n.id + "|" + pwActionName(a) + "|" + JSON.stringify(args));
+        btn.textContent = "Sent ✓"; setTimeout(function(){ btn.textContent="Execute"; }, 900);
+      };
+      bar.appendChild(btn); form.appendChild(bar);
+    }
+
+    actionWins[n.id] = { renderList: renderList, focus: focus,
+      refresh: function(){ if(!body.querySelector(".awform")) renderList(); },   // template arrived -> redraw list (form keeps its inputs)
+      setEligible: function(names){ eligible = (names && names.length) ? names : null; if(!body.querySelector(".awform")) renderList(); } };
+    renderList();
+  }
   // Restore the speaker/target pairing across panel close/reopen (persisted in localStorage).
   try{ var _p=JSON.parse(localStorage.getItem("pwPair")||"null");
     if(_p){ state.speaker=_p.s||null; state.speakerName=state.speaker?(_p.sn||"none"):"You"; state.target=_p.t||null; state.targetName=_p.tn||"none"; } }catch(e){}
@@ -1048,6 +1368,14 @@
       d.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); quickFire(act, n); };
       m.appendChild(d);
     });
+    // Built-in: the SkyrimNet action launcher for this actor (always present, after the
+    // data-driven items). Opens a persistent, per-actor window (see the launcher module).
+    var sep = document.createElement("div"); sep.className = "ctxsep"; m.appendChild(sep);
+    var da = document.createElement("div");
+    da.className = "ctxitem ctxaction";
+    da.textContent = "Actions…";
+    da.onclick = function(e){ e.stopPropagation(); closeCtxMenu(); openActionWindow(n); };
+    m.appendChild(da);
     // Anchor below the ⋯, clamped to the viewport.
     var r = anchorEl.getBoundingClientRect();
     m.classList.add("open");                       // show first so we can measure
@@ -1415,6 +1743,7 @@
     // before pwKey closes the menu, so the guard must suppress the default, not just bail.)
     if(nav.menu>=0 && document.getElementById("ctxMenu").classList.contains("open")){ e.preventDefault(); return; }
     var ae=document.activeElement;
+    if(ae && ae.closest && ae.closest(".actionwin")) return;   // typing/keys belong to a focused action window field
     if(ae===textBox || (ae && ae.classList && ae.classList.contains("edta"))) return;  // already typing
     // Only an actual alphabet letter starts composing. CEF delivers every key's keydown to the
     // page (independently of the DLL), so digits/symbols would otherwise focus the box and print

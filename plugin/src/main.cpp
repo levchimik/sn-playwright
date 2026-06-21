@@ -527,6 +527,55 @@ namespace
         }).detach();
     }
 
+    // --- Action launcher --------------------------------------------------------
+    // The SkyrimNet action registry is exposed over the SAME local REST API the log
+    // uses, so we reuse HttpRequest + the main-thread InteropCall push. The view
+    // renders the param form and fires execution back through pwCommand ->
+    // PW_Controller -> SkyrimNetApi.ExecuteAction (no HTTP execute endpoint exists).
+    void PushInterop(std::string a_fn, std::string a_json)
+    {
+        SKSE::GetTaskInterface()->AddTask([a_fn, a_json]() {
+            if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
+                g_prisma->InteropCall(g_view, a_fn.c_str(), a_json.c_str());
+            }
+        });
+    }
+
+    void FetchActionsAsync()
+    {
+        std::thread([]() {
+            PushInterop("pwSetActions", HttpRequest(L"GET", "/actions?api=actions", ""));
+        }).detach();
+    }
+
+    // Eligibility for one originator. The view passes its cast token (formid/"player")
+    // plus the SkyrimNet UUID; we echo the token back (tab-separated) so the view can
+    // route the result to the right window. PROBE-PENDING: confirm the exact query
+    // param (uuid vs formid) and the response shape against a live /actions?api=eligibility.
+    void FetchEligibleAsync(std::string a_token, std::string a_uuid)
+    {
+        std::thread([a_token, a_uuid]() {
+            std::string path = "/actions?api=eligibility";
+            if (!a_uuid.empty()) {
+                path += "&uuid=" + a_uuid;
+            }
+            const std::string resp = HttpRequest(L"GET", path, "");
+            PushInterop("pwSetEligible", a_token + "\t" + resp);
+        }).detach();
+    }
+
+    // Many action descriptions are raw Jinja ({{render_template("helpers/...")}}). The
+    // /actions API returns them unrendered; we fetch the referenced template's source via
+    // SkyrimNet's prompts API so the view can strip the Jinja to readable prose. (Correct
+    // per-actor rendering would need SkyrimNet's template engine, which we can't run.)
+    void FetchTemplateAsync(std::string a_path)
+    {
+        std::thread([a_path]() {
+            const std::string resp = HttpRequest(L"GET", "/prompts?api=get&path=" + a_path + ".prompt", "");
+            PushInterop("pwSetTemplate", a_path + "\t" + resp);
+        }).detach();
+    }
+
     struct NpcEntry
     {
         std::string name;
@@ -536,6 +585,7 @@ namespace
         bool        follower = false;  // the player's teammate/follower
         bool        pinned = false;    // member of SkyrimNet's "Pinned" group
         std::string factions = "[]";   // JSON array of matched "faction:..." showWhen tokens (npc.fx)
+        std::string uuid = "";         // SkyrimNet entity UUID (for /actions?api=eligibility); "" if unknown
     };
 
     // Refresh SkyrimNet's "Pinned" NPC group (dashboard pins) into g_pinnedUuids. Two cheap localhost
@@ -726,7 +776,8 @@ namespace
                     st,
                     follower,
                     pinned,
-                    fx });
+                    fx,
+                    sa.uuid });
             }
         } else if (auto* lists = RE::ProcessLists::GetSingleton()) {
             // FALLBACK (SkyrimNet web server unreachable): approximate locally.
@@ -801,7 +852,7 @@ namespace
             }
             json += "{\"name\":\"";
             json += JsonEsc(pc->GetDisplayFullName());
-            json += " (you)\",\"id\":\"player\",\"player\":true,\"state\":\"";
+            json += " (you)\",\"id\":\"player\",\"uuid\":\"\",\"player\":true,\"state\":\"";
             json += pst;
             json += "\",\"fx\":";
             json += BuildFactionTags(pc);
@@ -822,7 +873,9 @@ namespace
             json += e.pinned ? "true" : "false";
             json += ",\"fx\":";
             json += e.factions;
-            json += "}";
+            json += ",\"uuid\":\"";
+            json += e.uuid;
+            json += "\"}";
         }
         json += "]}";
         return json;
@@ -1591,6 +1644,22 @@ namespace
     // ---- editable log JS listeners (JS -> DLL; HTTP happens off-thread) ----
     void OnJsLogFetch(const char*) { FetchLogAsync(); }
 
+    void OnJsActionsFetch(const char*) { FetchActionsAsync(); }
+
+    void OnJsActionsEligible(const char* a_arg)
+    {
+        // arg = "<castToken>|<uuid>" (uuid may be empty for the fallback enumeration / player)
+        const std::string s = a_arg ? a_arg : "";
+        const auto bar = s.find('|');
+        if (bar == std::string::npos) {
+            FetchEligibleAsync(s, "");
+        } else {
+            FetchEligibleAsync(s.substr(0, bar), s.substr(bar + 1));
+        }
+    }
+
+    void OnJsTemplateFetch(const char* a_arg) { if (a_arg && *a_arg) FetchTemplateAsync(a_arg); }
+
     void OnJsLogDelete(const char* a_arg)
     {
         if (a_arg && *a_arg) {
@@ -1673,6 +1742,9 @@ namespace
             g_prisma->RegisterJSListener(a_view, "pwLogFetch", OnJsLogFetch);
             g_prisma->RegisterJSListener(a_view, "pwLogEdit", OnJsLogEdit);
             g_prisma->RegisterJSListener(a_view, "pwLogDelete", OnJsLogDelete);
+            g_prisma->RegisterJSListener(a_view, "pwActionsFetch", OnJsActionsFetch);
+            g_prisma->RegisterJSListener(a_view, "pwActionsEligible", OnJsActionsEligible);
+            g_prisma->RegisterJSListener(a_view, "pwTemplateFetch", OnJsTemplateFetch);
             // The view stays SHOWN at all times so its corner dot widget is always
             // visible; "closed" just collapses to the dot (unfocused, click-through
             // via pointer-events:none on empty areas). It is never Hidden.

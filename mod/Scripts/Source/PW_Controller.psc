@@ -616,6 +616,18 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
         If t
             PrismaWake(t)
         EndIf
+    ElseIf action == "execaction"
+        ; Action launcher: fire a SkyrimNet registered action ON the originator (field 1).
+        ; field 2 = action name; everything after the 3rd '|' = the args JSON (may contain
+        ; ',' / ':' but never '|'). ExecuteAction runs irrespective of cooldown/eligibility.
+        String actName = PipeField(strArg, 2)
+        String argsJson = PipeRest(strArg, 3)
+        If argsJson == ""
+            argsJson = "{}"
+        EndIf
+        If t && actName != ""
+            SkyrimNetApi.ExecuteAction(actName, t, argsJson)
+        EndIf
     EndIf
 EndFunction
 
