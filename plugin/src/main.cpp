@@ -363,6 +363,109 @@ namespace
         return first ? std::string{} : out;  // all-blank -> "" -> view keeps its default
     }
 
+    // Scenario files for the script sequencer. Read every *.json in
+    // Data/SKSE/Plugins/SNPlaywright/scenarios/ (MO2/VFS-merged, hand-authored or LLM-generated)
+    // and wrap each in a {file,body} envelope -- [{"file":"<stem>","body":{...scenario...}}, ...] --
+    // so the view knows which file to overwrite/delete when editing. body is the file's raw JSON
+    // spliced inline (it's already JSON, no escaping). Same disk pattern as ReadMenuFragments: we
+    // do NOT parse the body here, so a malformed file just makes the view skip that entry. "" when
+    // the folder is absent or all-blank, so the view shows an empty launcher rather than erroring.
+    std::string ReadScenarioFiles()
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path dir = "Data\\SKSE\\Plugins\\SNPlaywright\\scenarios";
+        if (!fs::is_directory(dir, ec)) {
+            return "";
+        }
+        std::vector<fs::path> files;
+        for (const auto& entry : fs::directory_iterator(dir, ec)) {
+            if (!entry.is_regular_file(ec)) {
+                continue;
+            }
+            std::string ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".json") {
+                files.push_back(entry.path());
+            }
+        }
+        if (files.empty()) {
+            return "";
+        }
+        std::sort(files.begin(), files.end());  // deterministic order by filename
+
+        std::string out = "[";
+        bool first = true;
+        for (const auto& p : files) {
+            std::ifstream f(p, std::ios::binary);
+            if (!f) {
+                continue;
+            }
+            std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            const auto b = content.find_first_not_of(" \t\r\n");
+            if (b == std::string::npos) {
+                continue;  // blank file
+            }
+            const auto e = content.find_last_not_of(" \t\r\n");
+            content = content.substr(b, e - b + 1);
+            if (!first) {
+                out += ",";
+            }
+            out += "{\"file\":\"" + JsonEsc(p.stem().string().c_str()) + "\",\"body\":" + content + "}";
+            first = false;
+        }
+        out += "]";
+        return first ? std::string{} : out;
+    }
+
+    // Keep a scenario filename stem inside the scenarios/ folder: allow only alnum, dash,
+    // underscore, space (drops path separators, dots, '..'), then trim. Empty -> reject the write.
+    std::string SanitizeStem(const std::string& a_in)
+    {
+        std::string out;
+        for (char c : a_in) {
+            const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == ' ';
+            if (ok) {
+                out += c;
+            }
+        }
+        const auto b = out.find_first_not_of(' ');
+        if (b == std::string::npos) {
+            return "";
+        }
+        const auto e = out.find_last_not_of(' ');
+        return out.substr(b, e - b + 1);
+    }
+
+    // Write/delete a scenario file (editor save/delete). Stem is sanitized so the view can never
+    // escape the scenarios folder; the body is whatever JSON the editor serialized.
+    void WriteScenarioFile(const std::string& a_stem, const std::string& a_json)
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const std::string stem = SanitizeStem(a_stem);
+        if (stem.empty()) {
+            return;
+        }
+        const fs::path dir = "Data\\SKSE\\Plugins\\SNPlaywright\\scenarios";
+        fs::create_directories(dir, ec);
+        std::ofstream f(dir / (stem + ".json"), std::ios::binary | std::ios::trunc);
+        if (f) {
+            f << a_json;
+        }
+    }
+
+    void DeleteScenarioFile(const std::string& a_stem)
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const std::string stem = SanitizeStem(a_stem);
+        if (!stem.empty()) {
+            fs::remove(fs::path("Data\\SKSE\\Plugins\\SNPlaywright\\scenarios") / (stem + ".json"), ec);
+        }
+    }
+
     // Auto-discover the faction roster: scan the raw fragment JSON for "faction:<token>" tokens
     // (inside showWhen strings) and resolve each to a live Faction. A token is either a
     // "<formid>~<plugin>" pair (e.g. "0x1BDB1~Skyrim.esm" — always resolvable, no dependency) or a
@@ -1210,6 +1313,10 @@ namespace
                     SKSE::GetTaskInterface()->AddTask([]() { ToggleMenu(); });
                 } else if (nm == "PW_PrismaDirector") {
                     PushDirector(a_event->numArg >= 0.5f);  // recording dot on/off
+                } else if (nm == "PW_PrismaStat") {
+                    // Scenario sequencer: relay the live speech state (queue|msSinceAudio|ttsFin)
+                    // straight to the view so its JS arm->drain pacing loop can advance.
+                    PushInterop("pwBeatStat", a_event->strArg.c_str());
                 }
             }
             return RE::BSEventNotifyControl::kContinue;
@@ -1702,6 +1809,30 @@ namespace
 
     void OnJsTemplateFetch(const char* a_arg) { if (a_arg && *a_arg) FetchTemplateAsync(a_arg); }
 
+    // Scenario launcher: read the scenarios/ folder off disk and push the array to the view.
+    void OnJsScenariosFetch(const char*) { PushInterop("pwSetScenarios", ReadScenarioFiles()); }
+
+    // Editor save: payload = "<stem>\t<json>". Write the file, then re-push the refreshed list so
+    // the launcher (and the file-identity envelope) reflect the change immediately.
+    void OnJsScenarioSave(const char* a_arg)
+    {
+        const std::string s = a_arg ? a_arg : "";
+        const auto tab = s.find('\t');
+        if (tab == std::string::npos) {
+            return;
+        }
+        WriteScenarioFile(s.substr(0, tab), s.substr(tab + 1));
+        PushInterop("pwSetScenarios", ReadScenarioFiles());
+    }
+
+    void OnJsScenarioDelete(const char* a_arg)
+    {
+        if (a_arg && *a_arg) {
+            DeleteScenarioFile(a_arg);
+        }
+        PushInterop("pwSetScenarios", ReadScenarioFiles());
+    }
+
     void OnJsLogDelete(const char* a_arg)
     {
         if (a_arg && *a_arg) {
@@ -1787,6 +1918,9 @@ namespace
             g_prisma->RegisterJSListener(a_view, "pwActionsFetch", OnJsActionsFetch);
             g_prisma->RegisterJSListener(a_view, "pwActionsEligible", OnJsActionsEligible);
             g_prisma->RegisterJSListener(a_view, "pwTemplateFetch", OnJsTemplateFetch);
+            g_prisma->RegisterJSListener(a_view, "pwScenariosFetch", OnJsScenariosFetch);
+            g_prisma->RegisterJSListener(a_view, "pwScenarioSave", OnJsScenarioSave);
+            g_prisma->RegisterJSListener(a_view, "pwScenarioDelete", OnJsScenarioDelete);
             // The view stays SHOWN at all times so its corner dot widget is always
             // visible; "closed" just collapses to the dot (unfocused, click-through
             // via pointer-events:none on empty areas). It is never Hidden.

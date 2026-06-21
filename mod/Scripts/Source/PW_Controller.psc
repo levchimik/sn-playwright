@@ -24,6 +24,15 @@ Float Property MurmurChance    = 0.35 Auto  ; per-check chance each nearby sleep
 Bool _murmurLoop = false   ; true while the murmur OnUpdate loop is scheduled
 Bool _pdWasEnabled = true  ; remembers the player's autonomous-thought setting to restore on OFF
 
+; --- Scenario suppression: while a scene plays, NPC world-event reactions and the GameMaster
+;     agent are forced OFF so off-script interjections / autonomous scene-planning don't derail
+;     the authored beats. Saved-then-restored via GetConfigBool/PatchConfig (the same proven path
+;     ToggleDirector uses for PlayerDialogue) rather than the TriggerToggle* hotkey-sims, which
+;     can't read prior state and no-op while the panel holds focus. ---
+Bool _scActive   = false   ; true while a scenario run is suppressing
+Bool _scReactWas = true    ; saved Events.global.npcReactionsEnabled
+Bool _scGmWas    = true     ; saved game.gamemaster.enabled
+
 ; ------------------------------------------------------------------ factions
 Faction Function GetBlacklistFaction()
     Return Game.GetFormFromFile(0x12DB, "SkyrimNet.esp") as Faction
@@ -175,6 +184,41 @@ Function ToggleDirector()
         Debug.Notification("Director Mode: ON - you have left the scene")
         SendModEvent("PW_PrismaDirector", "", 1.0)
     EndIf
+EndFunction
+
+; ------------------------------------------------------------------ scenario suppression
+; Force NPC reactions + GameMaster OFF for the duration of a scenario, saving prior state.
+; Guarded by _scActive so a double-start can't overwrite the saved originals with already-off
+; values (which would leave them stuck off after the scene). Idempotent.
+Function SceneSuppressOn()
+    If _scActive
+        Return
+    EndIf
+    _scActive = true
+    _scReactWas = SkyrimNetApi.GetConfigBool("Events", "global.npcReactionsEnabled", true)
+    If _scReactWas
+        SkyrimNetApi.PatchConfig("Events", "{\"global\":{\"npcReactionsEnabled\":false}}")
+    EndIf
+    _scGmWas = SkyrimNetApi.GetConfigBool("game", "gamemaster.enabled", true)
+    If _scGmWas
+        SkyrimNetApi.PatchConfig("game", "{\"gamemaster\":{\"enabled\":false}}")
+    EndIf
+    Debug.Notification("Scene: reactions + GameMaster paused")
+EndFunction
+
+; Restore whatever SceneSuppressOn turned off. No-op if no scene is active.
+Function SceneSuppressOff()
+    If !_scActive
+        Return
+    EndIf
+    If _scReactWas
+        SkyrimNetApi.PatchConfig("Events", "{\"global\":{\"npcReactionsEnabled\":true}}")
+    EndIf
+    If _scGmWas
+        SkyrimNetApi.PatchConfig("game", "{\"gamemaster\":{\"enabled\":true}}")
+    EndIf
+    _scActive = false
+    Debug.Notification("Scene: reactions + GameMaster restored")
 EndFunction
 
 ; ------------------------------------------------------------------ deep sleep (unconscious)
@@ -703,8 +747,8 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
     ElseIf action == "gamemaster"
         SkyrimNetApi.TriggerToggleGameMaster()           ; global: GameMaster agent on/off (config-backed)
     ElseIf action == "npcreact"
-        ; Toggle NPC world-event reactions via the CONFIG -- the key the DLL reads and the
-        ; SkyrimNet dashboard writes. (TriggerToggleWorldEventReactions flips a live
+        ; Toggle NPC world-event reactions via the CONFIG -- the key the DLL reads, the SkyrimNet
+        ; dashboard writes, and SceneSuppress uses. (TriggerToggleWorldEventReactions flips a live
         ; in-memory flag that is NOT config-backed and has no readable status endpoint, so the
         ; panel pill could never mirror it -- it stayed stuck "on".)
         If SkyrimNetApi.GetConfigBool("Events", "global.npcReactionsEnabled", true)
@@ -714,6 +758,32 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
         EndIf
     ElseIf action == "continarrate"
         SkyrimNetApi.TriggerContinueNarration()          ; global: let the speaker selector continue the scene
+    ElseIf action == "scenestart"
+        SceneSuppressOn()      ; scenario run begins -> force reactions + GameMaster off
+    ElseIf action == "sceneend"
+        SceneSuppressOff()     ; scenario run ends/stops -> restore prior state
+    ElseIf action == "beatstat"
+        ; Scenario sequencer pacing probe (no actor work): report the live speech state back to
+        ; the view so its JS arm->drain loop knows when a spoken beat has started and finished.
+        ; The view polls this every ~250ms while a speech beat is in flight. Packed as
+        ; "<queueSize>|<msSinceAudioEnded>|<playerTtsFinished 0/1>|<npcDialogueReady 0/1>" on the
+        ; PW_PrismaStat ModEvent; SNPlaywright.dll relays it to the view as pwBeatStat. (Trace showed
+        ; queueSize is always 0 and playerTtsFinished always false for this TTS path, so msSinceAudio
+        ; is the real signal; npcDialogueReady is probed as a possible "currently speaking" marker.)
+        Int q = SkyrimNetApi.GetSpeechQueueSize()
+        Int ms = SkyrimNetApi.GetTimeSinceLastAudioEnded()
+        String stat = (q as String) + "|" + (ms as String) + "|"
+        If SkyrimNetApi.IsPlayerTTSFinished()
+            stat += "1|"
+        Else
+            stat += "0|"
+        EndIf
+        If SkyrimNetApi.IsNPCDialogueReady()
+            stat += "1"
+        Else
+            stat += "0"
+        EndIf
+        SendModEvent("PW_PrismaStat", stat, 0.0)
     ElseIf action == "musethink"
         ; Autonomous "think to self" (no text): SkyrimNet's LLM invents the thought from
         ; current scene context. NPC -> GenerateNPCThought (skips dead/sleeping silently);
@@ -756,7 +826,11 @@ Function PrismaWake(Actor t)
 EndFunction
 
 ; "player" -> the player; "0x...." -> resolve the runtime FormID (SKSE GetFormEx
-; handles the full unsigned 32-bit range, incl. ESL FE.. ids); "" -> None.
+; handles the full unsigned 32-bit range, incl. ESL FE.. ids); a bare name -> resolve
+; by display name among nearby actors (FindActorByName, within 4000u, case-insensitive);
+; "" -> None. The name path is what makes scenario files LLM-generateable: a scene JSON
+; references "Lydia"/"Nazeem", never a runtime FormID. The panel always sends "0x"/"player",
+; so it never hits the name branch.
 Actor Function ResolveTarget(String token)
     If token == ""
         Return None
@@ -764,7 +838,10 @@ Actor Function ResolveTarget(String token)
     If token == "player" || token == "Player"
         Return Game.GetPlayer()
     EndIf
-    Return Game.GetFormEx(HexToInt(token)) as Actor
+    If StringUtil.GetLength(token) >= 2 && StringUtil.SubString(token, 0, 2) == "0x"
+        Return Game.GetFormEx(HexToInt(token)) as Actor
+    EndIf
+    Return SkyrimNetApi.FindActorByName(token)
 EndFunction
 
 ; Parse a "0x"-prefixed (or bare) hex string to an Int. Two's-complement wrap is

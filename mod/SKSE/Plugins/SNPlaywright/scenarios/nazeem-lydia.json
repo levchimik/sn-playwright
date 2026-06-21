@@ -1,0 +1,11 @@
+{
+  "name": "Nazeem vs Lydia",
+  "beats": [
+    { "do": "system",  "speaker": "Nazeem", "text": "Nazeem has spent all morning loudly reminding everyone how important he is in the Cloud District." },
+    { "do": "narrate", "speaker": "Nazeem", "target": "Lydia", "text": "Nazeem looks Lydia up and down, sneers at her housecarl's armor, and asks whether she ever gets to the Cloud District." },
+    { "do": "think",   "target": "Lydia", "text": "This puffed-up fool wouldn't last a single day with a real sword in his hand." },
+    { "do": "say",     "speaker": "Lydia", "target": "Nazeem", "improvise": true, "text": "Lydia coolly informs Nazeem that sworn service to the Dragonborn outranks tending a vegetable patch." },
+    { "do": "narrate", "speaker": "Nazeem", "target": "Lydia", "text": "Nazeem splutters, caught completely off guard that a mere housecarl would dare answer him back." },
+    { "do": "say",     "speaker": "Nazeem", "target": "Lydia", "text": "Hmph. Do you even know who I am?" }
+  ]
+}

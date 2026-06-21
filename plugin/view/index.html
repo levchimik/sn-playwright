@@ -194,6 +194,42 @@
   .awchip{display:inline-block;background:rgba(201,161,74,0.20);color:var(--accent);font-size:calc(12px*var(--fs));padding:4px 9px;border-radius:8px;font-weight:500;}
   .awsel{width:100%;background:var(--bg2);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:6px 8px;font-size:calc(12px*var(--fs));}
   .awexecbar{display:flex;justify-content:flex-end;padding:8px 12px 12px;}
+  .scenbar{gap:6px;}
+  .scenbar .awexec{flex:1 1 auto;}
+  .scenbeats .awrow{cursor:pointer;}
+  .scrow{display:flex;align-items:center;}
+  .scrow .awrowmain{flex:1 1 auto;min-width:0;}
+  .scrowact{display:flex;gap:1px;flex:0 0 auto;margin-left:6px;}
+  .scicon{cursor:pointer;color:var(--muted);font-size:calc(13px*var(--fs));padding:4px 6px;border-radius:5px;line-height:1;}
+  .scicon:hover{color:var(--accent);background:rgba(255,255,255,0.06);}
+  .scicon.scdel:hover{color:var(--danger);}
+  /* scenario editor */
+  .scbar2{gap:6px;flex-wrap:wrap;justify-content:flex-start;}
+  .scbar2 .awexec{flex:1 1 auto;}
+  .awexec.awdanger{background:var(--danger);}
+  .scedit{padding:4px 2px 2px;}
+  .scedit .sclabel{color:var(--muted);font-size:calc(10px*var(--fs));margin:6px 2px 2px;}
+  .scedit .scfield{width:100%;box-sizing:border-box;background:var(--bg2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:5px 7px;font-size:calc(12px*var(--fs));font-family:inherit;}
+  .scedit textarea.scfield{resize:vertical;}
+  .scedit .scbeat{border:1px solid var(--line);border-radius:8px;padding:8px;margin:8px 0;background:rgba(255,255,255,0.02);}
+  .scedit .scbeathead{display:flex;align-items:center;gap:6px;}
+  .scedit .scbeathead select.scfield{width:auto;flex:0 0 auto;}
+  .scedit .scnum{color:var(--muted);font-size:calc(11px*var(--fs));}
+  .scedit .scspacer{flex:1 1 auto;}
+  .scedit .scbtnmini{cursor:pointer;border:1px solid var(--line);border-radius:5px;padding:2px 8px;color:var(--muted);font-size:calc(12px*var(--fs));background:none;line-height:1.3;}
+  .scedit .scbtnmini:hover:not(:disabled){color:var(--accent);border-color:var(--accent);}
+  .scedit .scbtnmini:disabled{opacity:0.3;cursor:default;}
+  .scedit .scadd{display:block;width:100%;margin:6px 0 2px;padding:6px;}
+  .scedit .scfrow{display:flex;gap:10px;align-items:flex-end;margin-top:4px;}
+  .scedit .scfrow>div{flex:1;}
+  .scedit .scchk{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:calc(11px*var(--fs));cursor:pointer;flex:1;}
+  .scedit .scbeatc{padding:6px 8px;}
+  .scedit .scbeatc .scbeathead{gap:5px;}
+  .scedit .sccaret{color:var(--muted);font-size:calc(11px*var(--fs));width:12px;flex:0 0 auto;}
+  .scedit .scbeatsum{font-size:calc(11px*var(--fs));color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+  .scedit .scbeatsum b{color:var(--fg);font-weight:600;}
+  .scedit .scdesc{font-size:calc(10px*var(--fs));color:var(--muted);font-style:italic;margin:5px 2px;line-height:1.45;}
+  .scedit .schint{color:#6e6b63;font-style:italic;}
   .awexec{background:var(--accent);color:#1a1a1a;border:0;border-radius:7px;padding:8px 16px;font-weight:600;font-size:calc(12px*var(--fs));cursor:pointer;}
   .awexec:hover{filter:brightness(1.08);}
   .ctxsep{height:1px;background:var(--line);margin:4px 6px;}
@@ -294,6 +330,8 @@
 <div id="panel" tabindex="-1">
   <header>
     <div class="title">PLAYWRIGHT<small>scene control</small></div>
+    <div id="scenBtn" class="hbtn" onclick="toggleScenarios()" title="Scenarios">&#127916;</div>
+    <div id="logBtn" class="hbtn" onclick="toggleLog()" title="Conversation log">&#128172;</div>
     <div id="setBtn" class="hbtn" onclick="toggleSettings()" title="Settings">&#9881;</div>
     <div id="helpBtn" class="hbtn" onclick="toggleHelp()" title="Keyboard controls">?</div>
     <div class="closebtn" onclick="closePanel()">&#10005;</div>
@@ -311,9 +349,6 @@
       <!-- Group 3: momentary one-shots -->
       <div id="interruptPill" class="pill" onclick="interruptDialogue()" title="Cut off all in-progress NPC speech and pending generation right now (mirrors SkyrimNet's interrupt-dialogue hotkey). Hotkey: -">Interrupt</div>
       <div id="contNarratePill" class="pill" onclick="continueNarration()" title="Continue narration — nudge SkyrimNet's speaker selector to carry the scene forward (mirrors SkyrimNet's continue-narration hotkey). One-shot.">Continue</div>
-      <div class="pilldiv"></div>
-      <!-- Group 4: panel -->
-      <div id="logPill" class="pill" onclick="toggleLog()">Log</div>
     </div>
   </header>
 
@@ -424,6 +459,9 @@
   window.pwActionsFetch    = window.pwActionsFetch    || function(){};
   window.pwActionsEligible = window.pwActionsEligible || function(){};
   window.pwTemplateFetch   = window.pwTemplateFetch   || function(){};
+  window.pwScenariosFetch  = window.pwScenariosFetch  || function(){};
+  window.pwScenarioSave    = window.pwScenarioSave    || function(){};
+  window.pwScenarioDelete  = window.pwScenarioDelete  || function(){};
 
   // Called by C++ (InteropCall) to expand the full panel or collapse to the dot.
   window.pwSetOpen = function(v){
@@ -651,7 +689,7 @@
 
   function toggleLog(){
     var on=document.body.classList.toggle("logopen");
-    document.getElementById("logPill").classList.toggle("on", on);
+    document.getElementById("logBtn").classList.toggle("on", on);
     try{ localStorage.setItem("pwLogOpen", on?"1":"0"); }catch(e){}
     if(on) window.pwLogFetch("");
   }
@@ -720,7 +758,7 @@
     try{
       if(localStorage.getItem("pwLogOpen")==="1"){
         document.body.classList.add("logopen");
-        document.getElementById("logPill").classList.add("on");
+        document.getElementById("logBtn").classList.add("on");
       }
     }catch(e){}
     var dr=false,ox=0,oy=0;
@@ -909,6 +947,7 @@
     try{ var p = JSON.parse(json); pwActions = Array.isArray(p) ? p : (p && (p.actions||p.data||p.items)) || []; }
     catch(e){ pwActions = []; }
     Object.keys(actionWins).forEach(function(k){ actionWins[k].renderList(); });
+    if(scenWin && scenEdit) renderScen();   // editor's execaction picker waits on the registry
   };
   // payload = "<token>\t<eligibility-json>". Response shape is probe-pending; we accept an
   // array of names or {actions|eligible:[...]} and otherwise leave the window showing all.
@@ -983,6 +1022,7 @@
     pwTemplates[path] = pwStripJinja(content);
     delete pwTemplatePend[path];
     Object.keys(actionWins).forEach(function(k){ if(actionWins[k].refresh) actionWins[k].refresh(); });
+    if(scenWin && scenEdit) renderScen();   // a fetched action description just resolved
   };
 
   function openActionWindow(n){
@@ -1173,6 +1213,446 @@
       setEligible: function(names){ eligible = (names && names.length) ? names : null; if(!body.querySelector(".awform")) renderList(); } };
     renderList();
   }
+
+  // ===== Scenario sequencer ====================================================
+  // A "scenario" is an ordered list of beats, each one an EXISTING Playwright command
+  // (narrate/say/think/system/execaction/sleep/...). Files live on disk in
+  // SKSE/Plugins/SNPlaywright/scenarios/*.json; the DLL reads them and pushes the array
+  // here. The view drives the sequence: fire beat[i] as a normal pwCommand, wait for it
+  // to finish (speech beats poll the live speech state via "beatstat"; others a fixed ms),
+  // advance the ▶ cursor, fire the next. Restart-from-middle / replay = run from any index;
+  // beats before it are simply not fired (the author's problem if setup is skipped).
+  var pwScenarios = null, pwScenLoading = false;   // registry (array) or null until first fetch
+  var scenWin = null, scenIdx = -1, scenSel = 0, scenEdit = false;  // window; selected scenario; cursor; edit mode
+  var scEditOpen = 0;   // editor accordion: index of the expanded beat (-1 = all collapsed)
+  // Sequencer run state. lastStat = most recent speech snapshot from Papyrus (q=queue size,
+  // ms=since-audio-ended, tts=player-TTS finished). Timing uses the view's own clock for the
+  // post-drain idle gap, so it doesn't depend on the exact ms semantics.
+  var seq = { running:false, beats:[], i:0, poll:null, to:null, armed:false, quietSince:0, beatStart:0,
+              lastStat:{ q:0, ms:999999, tts:true } };
+  var SEQ_POLL=150, SEQ_ARM_TIMEOUT=15000, SEQ_HARD_MAX=30000, SEQ_TAIL=3000, SEQ_GRACE=1800, SEQ_RESET_DROP=150;  // ms; tune in-game
+  var pacingLog = [];   // per-run timing samples, written to scenarios/_trace.json on run end (diagnosis)
+
+  window.pwSetScenarios = function(json){
+    pwScenLoading = false;
+    // Preserve which scenario is open across a save/delete re-push (the DLL re-sorts by filename,
+    // so the index can shift) by re-finding it via its _file stem.
+    var curFile = (scenIdx>=0 && pwScenarios && pwScenarios[scenIdx]) ? pwScenarios[scenIdx]._file : null;
+    try{
+      var p = JSON.parse(json); var arr = Array.isArray(p) ? p : [];
+      pwScenarios = arr.map(function(e){
+        if(e && typeof e.body==="object" && e.body){ var sc = e.body; sc._file = e.file || ""; return sc; }
+        return e;   // tolerate a bare scenario object (older shape)
+      }).filter(function(sc){ return !(sc && sc._file && sc._file.charAt(0)==="_"); });   // hide _trace etc.
+    }catch(e){ pwScenarios = []; }
+    if(curFile){
+      var ni = -1; pwScenarios.forEach(function(s, k){ if(s._file===curFile) ni=k; });
+      if(ni>=0){ scenIdx=ni; } else { scenIdx=-1; scenEdit=false; }
+    }
+    if(scenWin) renderScen();
+  };
+  // "q|ms|tts" pushed by the DLL relay of PW_PrismaStat. Just cache it; speechTick reads it.
+  window.pwBeatStat = function(p){
+    var a = (p||"").split("|");
+    seq.lastStat = { q:parseInt(a[0],10)||0, ms:parseInt(a[1],10)||0, tts:(a[2]==="1"), nrd:(a[3]==="1") };
+  };
+
+  // ---- beat -> existing command payload --------------------------------------
+  // Reuses the exact "action|target|transform|speaker|text" wire format the panel buttons
+  // send (and the execaction/sleep special forms). speaker/target are NAMES; Papyrus resolves
+  // them via FindActorByName (or "player"), so scenario files carry no runtime FormIDs.
+  function pwBeatPayload(b){
+    var d  = (b.do||"").trim();
+    var sp = (b.speaker!=null ? String(b.speaker) : "");
+    var tg = (b.target !=null ? String(b.target ) : "");
+    var tx = (b.text   !=null ? String(b.text   ) : "");
+    var xf = b.improvise ? "1" : "0";
+    if(d==="execaction"){
+      var args; try{ args = JSON.stringify(b.args||{}); }catch(e){ args = "{}"; }
+      return "execaction|" + (tg||sp) + "|" + (b.action||"") + "|" + args;   // originator|name|argsJson
+    }
+    if(d==="sleep"||d==="sleeptalk"||d==="wake"){ return d + "|" + (tg||sp) + "|"; }
+    if(d==="say"){ return "say|" + tg + "|" + xf + "|" + sp + "|" + tx; }     // speaker -> target
+    // single-actor text beats (narrate/system/think/musethink/transform): actor in speaker slot
+    return d + "|" + tg + "|" + xf + "|" + (sp||tg) + "|" + tx;
+  }
+  function pwBeatWait(b){
+    if(b.wait==="speech") return "speech";
+    if(typeof b.wait==="number" && isFinite(b.wait)) return b.wait;
+    var d = (b.do||"");
+    // think/musethink also run through SkyrimNet's LLM+TTS, so pace them off audio too
+    // (else we fire the next beat ~700ms in, while the thought is still being spoken).
+    return (d==="narrate"||d==="say"||d==="transform"||d==="think"||d==="musethink") ? "speech" : 700;
+  }
+  function pwBeatLabel(b){
+    var d = (b.do||"?"), who = (b.speaker||b.target||"");
+    var tail = (d==="execaction") ? (b.action||"") : (b.text||"");
+    return d + (who ? (" · "+who) : "") + (tail ? (" · "+pwClip(tail,60)) : "");
+  }
+
+  // ---- run loop --------------------------------------------------------------
+  function seqClearTimers(){ if(seq.poll){ clearInterval(seq.poll); seq.poll=null; } if(seq.to){ clearTimeout(seq.to); seq.to=null; } }
+  function runFrom(idx){
+    if(scenIdx<0 || !pwScenarios || !pwScenarios[scenIdx]) return;
+    pacingLog = [];                                // fresh timing trace for this run
+    stopSeq(false);
+    seq.beats = pwScenarios[scenIdx].beats || [];
+    seq.i = idx; seq.running = true;
+    send("scenestart||");                          // force NPC reactions + GameMaster off for the run
+    renderScen();
+    fireBeat();
+  }
+  function fireBeat(){
+    if(!seq.running) return;
+    if(seq.i >= seq.beats.length){ stopSeq(true); return; }
+    seq._trace = [];                               // per-beat sample buffer (speech beats fill it)
+    scenSel = seq.i; renderScen();                 // move the ▶ to the executing beat
+    send(pwBeatPayload(seq.beats[seq.i]));
+    var w = pwBeatWait(seq.beats[seq.i]);
+    if(w==="speech"){ startSpeechWait(); }
+    else { seq.to = setTimeout(function(){ seq.to=null; advanceBeat(); }, w); }
+  }
+  function startSpeechWait(){
+    seq.armed=false; seq.prevMs=-1; seq.lastReset=0; seq.beatStart=Date.now();
+    seq.lastStat={ q:-1, ms:-1, tts:true, nrd:false };   // -1 = no real snapshot yet
+    seqClearTimers();
+    seq.poll = setInterval(speechTick, SEQ_POLL);
+  }
+  // Pacing (trace-driven). The only live signal for this TTS path is GetTimeSinceLastAudioEnded
+  // (ms): it RESETS to ~0 each time a line of audio ends, then climbs. queue is always 0 and
+  // player-TTS-finished always false here, so we pace off ms-resets: arm on the first reset (a
+  // line started playing), and advance once no new audio-end has occurred for SEQ_TAIL. If
+  // npcDialogueReady (nrd) turns out to mark "currently speaking", it holds the tail open across
+  // the gaps between a line's sentences so long lines don't get clipped. Raw samples are still
+  // traced to scenarios/_trace.json to confirm nrd's behaviour and tune the tail.
+  function speechTick(){
+    window.pwCommand("beatstat||");                // request a fresh snapshot (lands via pwBeatStat)
+    var s = seq.lastStat, now = Date.now();
+    if(now - seq.beatStart > SEQ_HARD_MAX){ advanceBeat(); return; }
+    if(s.ms < 0) return;                            // wait for the first real snapshot
+    seq._trace.push((now-seq.beatStart)+","+s.q+","+s.ms+","+(s.tts?1:0)+","+(s.nrd?1:0));
+    var reset = (seq.prevMs >= 0 && s.ms < seq.prevMs - SEQ_RESET_DROP);   // an audio segment just ended
+    var afterGrace = (now - seq.beatStart) >= SEQ_GRACE;   // ignore the PRIOR line's tail bleeding in
+    if((reset && afterGrace) || s.q > 0 || s.nrd){ seq.armed = true; seq.lastReset = now; }
+    seq.prevMs = s.ms;
+    if(!seq.armed){
+      if(now - seq.beatStart > SEQ_ARM_TIMEOUT){ advanceBeat(); }          // never spoke -> skip
+      return;
+    }
+    if(now - seq.lastReset >= SEQ_TAIL){ advanceBeat(); }                  // quiet for the tail -> done
+  }
+  function advanceBeat(){
+    seqClearTimers();
+    if(seq._trace && seq._trace.length){           // record this beat's timeline
+      pacingLog.push({ beat:seq.i+1, do:(seq.beats[seq.i]||{}).do, total:Date.now()-seq.beatStart, s:seq._trace });
+    }
+    seq.armed=false; seq.quietSince=0;
+    if(!seq.running) return;
+    seq.i += 1;
+    fireBeat();
+  }
+  function stopSeq(done){
+    var was = seq.running;
+    seq.running=false; seqClearTimers(); seq.armed=false; seq.quietSince=0;
+    if(was && !done) send("interrupt||");          // manual Stop -> cut any in-progress line
+    send("sceneend||");                            // restore NPC reactions + GameMaster (idempotent)
+    if(pacingLog.length){ try{ window.pwScenarioSave("_trace\t"+JSON.stringify(pacingLog)); }catch(e){} }
+    renderScen();
+  }
+  // Step: fire the selected beat once, move the ▶ forward, do NOT chain. Manual pacing for testing.
+  function stepBeat(){
+    if(seq.running || scenIdx<0 || !pwScenarios[scenIdx]) return;
+    var beats = pwScenarios[scenIdx].beats || [];
+    if(scenSel<0 || scenSel>=beats.length) return;
+    send(pwBeatPayload(beats[scenSel]));
+    scenSel = Math.min(scenSel+1, beats.length-1);
+    renderScen();
+  }
+
+  // ---- window + rendering ----------------------------------------------------
+  function toggleScenarios(){ if(scenWin) closeScen(); else openScenWindow(); }
+  function closeScen(){ if(scenWin){ scenWin.remove(); scenWin=null; } var b=document.getElementById("scenBtn"); if(b) b.classList.remove("on"); }
+  function openScenWindow(){
+    if(scenWin){ scenWin.style.zIndex=(++actionZ); return; }
+    if(pwScenarios===null && !pwScenLoading){ pwScenLoading=true; window.pwScenariosFetch(); }
+    var win = document.createElement("div"); win.className="actionwin";
+    var g=null; try{ g=JSON.parse(localStorage.getItem("pwScenWin")||"null"); }catch(e){}   // restore size/pos
+    win.style.left=((g&&g.left!=null)?g.left:90)+"px";
+    win.style.top=((g&&g.top!=null)?g.top:64)+"px";
+    win.style.width=((g&&g.w)?g.w:340)+"px";
+    win.style.height=((g&&g.h)?g.h:420)+"px";
+    win.style.zIndex=(++actionZ);
+    function saveScenGeo(){ try{ localStorage.setItem("pwScenWin", JSON.stringify({ w:win.offsetWidth, h:win.offsetHeight, left:win.offsetLeft, top:win.offsetTop })); }catch(e){} }
+    win.innerHTML =
+      '<div class="awhead"><span class="awtitle">Scenarios</span><span class="awx" title="Close">&#10005;</span></div>' +
+      '<div class="awbody"></div>' +
+      '<div class="awresize" title="Drag to resize"></div>';
+    document.body.appendChild(win); scenWin=win;
+    var sb=document.getElementById("scenBtn"); if(sb) sb.classList.add("on");
+    win.addEventListener("pointerdown", function(){ win.style.zIndex=(++actionZ); });
+    win.querySelector(".awx").onclick = function(e){ e.stopPropagation(); closeScen(); };
+    (function(){   // drag by header
+      var head=win.querySelector(".awhead"), dr=false, ox=0, oy=0;
+      head.addEventListener("pointerdown", function(e){ if(e.target.closest(".awx")) return; dr=true; ox=e.clientX-win.offsetLeft; oy=e.clientY-win.offsetTop; try{ head.setPointerCapture(e.pointerId); }catch(_){ } e.preventDefault(); });
+      head.addEventListener("pointermove", function(e){ if(!dr) return; win.style.left=Math.max(0,Math.min(e.clientX-ox,window.innerWidth-win.offsetWidth))+"px"; win.style.top=Math.max(0,Math.min(e.clientY-oy,window.innerHeight-40))+"px"; });
+      head.addEventListener("pointerup", function(){ if(dr){ dr=false; saveScenGeo(); } });
+    })();
+    (function(){   // resize from corner
+      var rz=win.querySelector(".awresize"); if(!rz) return; var rzing=false, sw=0, sh=0, sx=0, sy=0;
+      rz.addEventListener("pointerdown", function(e){ rzing=true; sw=win.offsetWidth; sh=win.offsetHeight; sx=e.clientX; sy=e.clientY; try{ rz.setPointerCapture(e.pointerId); }catch(_){ } e.preventDefault(); e.stopPropagation(); });
+      rz.addEventListener("pointermove", function(e){ if(!rzing) return; win.style.width=Math.max(280,sw+(e.clientX-sx))+"px"; win.style.height=Math.max(240,sh+(e.clientY-sy))+"px"; });
+      rz.addEventListener("pointerup", function(){ if(rzing){ rzing=false; saveScenGeo(); } });
+    })();
+    renderScen();
+  }
+  function renderScen(){
+    if(!scenWin) return;
+    scClearTyping();
+    var body = scenWin.querySelector(".awbody");
+    if(pwScenarios===null || pwScenLoading){ body.innerHTML='<div class="awempty">Loading scenarios…</div>'; return; }
+    if(scenIdx<0 || !pwScenarios[scenIdx]){ scenEdit=false; renderScenList(body); }
+    else if(scenEdit){ renderScenEdit(body, pwScenarios[scenIdx]); }
+    else { renderScenDetail(body, pwScenarios[scenIdx]); }
+  }
+  function renderScenList(body){
+    body.innerHTML='<div class="awexecbar scbar2"><button class="awexec scbtn-new">＋ New scene</button></div><div class="awlist"></div>';
+    body.querySelector(".scbtn-new").onclick=function(){ newScen(); };
+    var L=body.querySelector(".awlist");
+    if(!pwScenarios.length){ var em=document.createElement("div"); em.className="awempty"; em.innerHTML='No scenarios yet — create one above,<br>or drop a .json in SKSE/Plugins/SNPlaywright/scenarios/.'; L.appendChild(em); return; }
+    pwScenarios.forEach(function(sc, idx){
+      var nm = sc.name || ("Scenario "+(idx+1));
+      var nbeats = (sc.beats && sc.beats.length) || 0;
+      var row=document.createElement("div"); row.className="awrow scrow";
+      row.innerHTML='<div class="awrowmain"><div class="awname">'+esc(nm)+'</div><div class="awdesc">'+nbeats+' beat'+(nbeats===1?"":"s")+'</div></div>'+
+        '<div class="scrowact">'+
+          '<span class="scicon" data-a="edit" title="Edit">&#9998;</span>'+
+          '<span class="scicon" data-a="dup" title="Duplicate">&#10697;</span>'+
+          '<span class="scicon scdel" data-a="del" title="Delete">&#128465;</span>'+
+        '</div>';
+      row.onclick=function(){ scenIdx=idx; scenSel=0; scenEdit=false; renderScen(); };
+      row.querySelector('[data-a="edit"]').onclick=function(e){ e.stopPropagation(); scenIdx=idx; scenSel=0; scenEdit=true; renderScen(); };
+      row.querySelector('[data-a="dup"]').onclick=function(e){ e.stopPropagation(); scenIdx=idx; dupScen(sc); };
+      row.querySelector('[data-a="del"]').onclick=function(e){ e.stopPropagation(); scenIdx=idx; delScen(sc); };
+      L.appendChild(row);
+    });
+  }
+  function renderScenDetail(body, sc){
+    var beats = sc.beats || [];
+    body.innerHTML='<div class="awback"><span class="awbacklink">&#8592; Back</span><span class="awformtitle"></span></div>'+
+                   '<div class="awlist scenbeats"></div><div class="awexecbar scenbar"></div>';
+    body.querySelector(".awbacklink").onclick=function(){ if(!seq.running){ scenIdx=-1; renderScen(); } };
+    body.querySelector(".awformtitle").textContent = sc.name || "Scenario";
+    var L=body.querySelector(".scenbeats");
+    if(!beats.length){ L.innerHTML='<div class="awempty">Empty scenario.</div>'; }
+    beats.forEach(function(b, idx){
+      var row=document.createElement("div"); row.className="awrow";
+      var cur=(idx===scenSel);
+      var arrow=cur ? "▶ " : (idx+1)+". ";
+      row.innerHTML='<div class="awrowmain"><div class="awname">'+esc(arrow)+esc(pwBeatLabel(b))+'</div></div>';
+      if(cur){ row.style.borderColor="var(--accent)"; row.querySelector(".awname").style.color="var(--accent)"; }
+      row.onclick=function(){ if(!seq.running){ scenSel=idx; renderScen(); } };
+      L.appendChild(row);
+    });
+    var bar=body.querySelector(".scenbar");
+    if(seq.running){
+      var stop=document.createElement("button"); stop.className="awexec"; stop.textContent="■ Stop";
+      stop.onclick=function(){ stopSeq(false); }; bar.appendChild(stop);
+    } else {
+      var run=document.createElement("button"); run.className="awexec"; run.textContent="▶ Run from "+(scenSel+1);
+      run.onclick=function(){ runFrom(scenSel); }; bar.appendChild(run);
+      var step=document.createElement("button"); step.className="awexec"; step.style.flex="0 0 auto"; step.textContent="Step";
+      step.onclick=function(){ stepBeat(); }; bar.appendChild(step);
+      var edit=document.createElement("button"); edit.className="awexec"; edit.style.flex="0 0 auto"; edit.textContent="✎ Edit";
+      edit.onclick=function(){ scenEdit=true; renderScen(); }; bar.appendChild(edit);
+    }
+  }
+
+  // ---- editor -----------------------------------------------------------------
+  // Edit mode mutates the in-memory scenario object directly; Save serializes it (minus _file)
+  // and hands it to the DLL to write. Structural changes (add/remove/reorder/do-change) re-render;
+  // text fields mutate on input WITHOUT re-render, so typing never loses focus.
+  function scSlug(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,48); }
+  function scWireTyping(el){ el.addEventListener("focus",function(){ window.pwConfig("typing|1"); }); el.addEventListener("blur",function(){ window.pwConfig("typing|0"); }); }
+  function scClearTyping(){ if(!scenWin) return; var ae=document.activeElement; if(ae && scenWin.contains(ae) && (ae.tagName==="INPUT"||ae.tagName==="SELECT"||ae.tagName==="TEXTAREA")) window.pwConfig("typingEnd|1"); }
+  function scLabel(t){ var d=document.createElement("div"); d.className="sclabel"; d.textContent=t; return d; }
+  function scInput(val, ph){ var i=document.createElement("input"); i.className="scfield"; i.value=(val==null?"":String(val)); if(ph) i.placeholder=ph; scWireTyping(i); return i; }
+  function scActorInput(val){ var i=scInput(val, "name (or 'player')"); i.setAttribute("list","scCastDL"); return i; }
+  function scTextarea(val){ var t=document.createElement("textarea"); t.className="scfield"; t.rows=2; t.value=(val==null?"":String(val)); scWireTyping(t); return t; }
+  // Which fields each beat type shows.
+  function beatFields(d){
+    if(d==="say")        return { speaker:1, target:1, text:1, improvise:1, wait:1 };
+    if(d==="narrate")    return { speaker:1, target:1, text:1, wait:1 };
+    if(d==="system")     return { speaker:1, target:1, text:1 };
+    if(d==="think")      return { target:1, text:1, improvise:1 };
+    if(d==="transform")  return { target:1, text:1, improvise:1, wait:1 };
+    if(d==="musethink")  return { target:1 };
+    if(d==="execaction") return { target:1, action:1, args:1, wait:1 };
+    if(d==="sleep"||d==="sleeptalk"||d==="wake") return { target:1 };
+    return { speaker:1, target:1, text:1 };
+  }
+
+  function newScen(){
+    if(!pwScenarios) pwScenarios=[];
+    pwScenarios.push({ name:"New scene", _file:"", beats:[ { do:"narrate", speaker:"", target:"", text:"" } ] });
+    scenIdx=pwScenarios.length-1; scenSel=0; scenEdit=true; renderScen();
+  }
+  function dupScen(sc){
+    var copy=JSON.parse(JSON.stringify(sc)); copy._file=""; copy.name=(sc.name||"Scene")+" copy";
+    pwScenarios.push(copy); scenIdx=pwScenarios.length-1; scenSel=0; scenEdit=true;
+    saveScen(copy);                                // persist immediately so the duplicate survives a reload
+    renderScen();
+  }
+  function delScen(sc){
+    if(sc._file) window.pwScenarioDelete(sc._file);   // DLL deletes + re-pushes the list
+    if(scenIdx>=0) pwScenarios.splice(scenIdx,1);      // also drop a never-saved scene locally
+    scenIdx=-1; scenEdit=false; renderScen();
+  }
+  function saveScen(sc){
+    var file = sc._file || scSlug(sc.name) || ("scene-"+Date.now());
+    sc._file = file;
+    var out={}; Object.keys(sc).forEach(function(k){ if(k!=="_file") out[k]=sc[k]; });
+    if(!out.name) out.name = sc.name || file;
+    if(!Array.isArray(out.beats)) out.beats=[];
+    window.pwScenarioSave(file + "\t" + JSON.stringify(out, null, 2));
+  }
+
+  // Human-readable beat-type labels (the option value stays the command verb).
+  var DO_LABELS = { narrate:"Narrate (NPC voices an event)", say:"Speak (line to a target)",
+    system:"System note (silent context)", think:"Think (private)", musethink:"Think (auto / LLM)",
+    transform:"Speak (LLM from a gist)", execaction:"Perform action", sleep:"Deep sleep",
+    sleeptalk:"Sleep-talk", wake:"Wake" };
+  var DO_SHORT = { narrate:"Narrate", say:"Speak", system:"System", think:"Think", musethink:"Think (auto)",
+    transform:"Speak (gist)", execaction:"Action", sleep:"Deep sleep", sleeptalk:"Sleep-talk", wake:"Wake" };
+  function doLabel(d){ return DO_LABELS[d] || d; }
+  function doShort(d){ return DO_SHORT[d] || d; }
+  function beatSummary(b){
+    var who = (b.speaker && b.target) ? (b.speaker+" → "+b.target) : (b.speaker || b.target || "");
+    var tail = (b.do==="execaction") ? (b.action||"") : (b.text||"");
+    return (who ? (" · "+who) : "") + (tail ? (" · "+pwClip(tail,40)) : "");
+  }
+  function scFindAction(name){ if(!pwActions||!name) return null; for(var i=0;i<pwActions.length;i++){ if(pwActionName(pwActions[i])===name) return pwActions[i]; } return null; }
+  function scSetArg(b,name,v){ b.args=b.args||{}; if(v===null||v===undefined||v===""){ delete b.args[name]; } else { b.args[name]=v; } }
+
+  // execaction editor: choose the action from SkyrimNet's live registry, then render its parameters
+  // as labelled fields with hints -- the same data the action launcher uses (pwActionParams +
+  // pwResolveDesc). Falls back to a raw args-JSON box if the typed action isn't in the registry.
+  function buildExecFields(b, card){
+    if(pwActions===null && !pwActionsLoading){ pwActionsLoading=true; window.pwActionsFetch(); }
+    card.appendChild(scLabel("action"));
+    var ai=scInput(b.action, pwActions===null ? "loading actions…" : "type to search actions");
+    ai.setAttribute("list","scActionDL");
+    ai.addEventListener("change", function(){ b.action=ai.value.trim(); renderScen(); });   // rebuild params for the new action
+    card.appendChild(ai);
+    if(pwActions){
+      var adl=document.createElement("datalist"); adl.id="scActionDL";
+      pwActions.filter(function(a){ return a.enabled!==false; }).map(pwActionName).sort().forEach(function(nm){ var o=document.createElement("option"); o.value=nm; adl.appendChild(o); });
+      card.appendChild(adl);
+    }
+    var act=scFindAction(b.action);
+    if(b.action && act){
+      var desc=pwResolveDesc(act.description||"");
+      if(desc){ var dd=document.createElement("div"); dd.className="scdesc"; dd.textContent=desc; card.appendChild(dd); }
+      b.args=b.args||{};
+      var params=pwActionParams(act), shown=0;
+      params.forEach(function(pm){
+        if(pm.mapping==="speaker"||pm.mapping==="static") return;   // auto = performer / server-fixed
+        shown++;
+        var l=scLabel(pm.name + (pm.optional?" (optional)":""));
+        if(pm.desc){ var h=document.createElement("span"); h.className="schint"; h.textContent=" · "+pm.desc; l.appendChild(h); }
+        card.appendChild(l);
+        var cur=b.args[pm.name], ctrl;
+        var isActor = pm.nearby || pm.type==="actor" || pm.type==="form" || /^ak[A-Z]/.test(pm.name);
+        if(isActor){ ctrl=scActorInput(cur); ctrl.oninput=function(){ scSetArg(b,pm.name,ctrl.value); }; }
+        else if(pm.options){ ctrl=document.createElement("select"); ctrl.className="scfield"; pm.options.forEach(function(v){ var o=document.createElement("option"); o.value=String(v); o.textContent=String(v); if(String(cur)===String(v)) o.selected=true; ctrl.appendChild(o); }); ctrl.onchange=function(){ scSetArg(b,pm.name,ctrl.value); }; }
+        else if(pm.type==="bool"||pm.type==="boolean"){ ctrl=document.createElement("select"); ctrl.className="scfield"; ["true","false"].forEach(function(v){ var o=document.createElement("option"); o.value=v; o.textContent=v; if(String(cur)===v) o.selected=true; ctrl.appendChild(o); }); ctrl.onchange=function(){ scSetArg(b,pm.name,ctrl.value==="true"); }; }
+        else { var num=(pm.type==="int"||pm.type==="float"||pm.type==="number"||pm.type==="integer"); ctrl=scInput(cur==null?(pm.def||""):cur, pm.type||"value"); if(num) ctrl.type="number"; ctrl.oninput=function(){ var v=ctrl.value; if(num){ v=(v===""?null:(v.indexOf(".")>=0?parseFloat(v):parseInt(v,10))); } scSetArg(b,pm.name,v); }; }
+        card.appendChild(ctrl);
+      });
+      if(!shown){ var none=document.createElement("div"); none.className="scdesc"; none.textContent="(no parameters)"; card.appendChild(none); }
+    } else if(b.action){
+      card.appendChild(scLabel("args (JSON)"));   // unknown action -> raw fallback
+      var gi=scInput(typeof b.args==="object" ? JSON.stringify(b.args) : (b.args||""), "{}");
+      gi.oninput=function(){ try{ b.args=JSON.parse(gi.value||"{}"); gi.style.borderColor=""; }catch(e){ gi.style.borderColor="var(--danger)"; } };
+      card.appendChild(gi);
+    }
+  }
+
+  function renderScenEdit(body, sc){
+    body.innerHTML='<div class="awback"><span class="awbacklink">&#8592; Back</span><span class="awformtitle">Edit scene</span></div><div class="scedit"></div>';
+    body.querySelector(".awbacklink").onclick=function(){ scenEdit=false; renderScen(); };
+    var root=body.querySelector(".scedit");
+
+    var dl=document.createElement("datalist"); dl.id="scCastDL";
+    var po=document.createElement("option"); po.value="player"; dl.appendChild(po);
+    (state.npcs||[]).forEach(function(np){ var o=document.createElement("option"); o.value=(np.name||"").replace(" (you)",""); dl.appendChild(o); });
+    root.appendChild(dl);
+
+    root.appendChild(scLabel("Scene name"));
+    var nameI=scInput(sc.name, "scene name"); nameI.oninput=function(){ sc.name=nameI.value; }; root.appendChild(nameI);
+
+    var list=document.createElement("div"); list.className="scbeatlist"; root.appendChild(list);
+    var beats = sc.beats || (sc.beats=[]);
+    if(scEditOpen > beats.length-1) scEditOpen = beats.length-1;   // clamp after deletes
+    beats.forEach(function(b, i){ list.appendChild(buildBeatCard(sc, b, i)); });
+
+    var add=document.createElement("button"); add.className="scbtnmini scadd"; add.textContent="＋ Add beat";
+    add.onclick=function(){ beats.push({ do:"narrate", speaker:"", target:"", text:"" }); scEditOpen=beats.length-1; renderScen(); };
+    root.appendChild(add);
+
+    var bar=document.createElement("div"); bar.className="awexecbar scbar2"; root.appendChild(bar);
+    var save=document.createElement("button"); save.className="awexec"; save.textContent="💾 Save";
+    save.onclick=function(){ saveScen(sc); save.textContent="Saved ✓"; setTimeout(function(){ save.textContent="💾 Save"; },900); }; bar.appendChild(save);
+  }
+
+  function buildBeatCard(sc, b, i){
+    var beats=sc.beats, d=b.do||"narrate", open=(i===scEditOpen);
+    var card=document.createElement("div"); card.className="scbeat" + (open?"":" scbeatc");
+    var head=document.createElement("div"); head.className="scbeathead";
+
+    if(open){
+      var caret=document.createElement("span"); caret.className="sccaret"; caret.textContent="▾"; caret.style.cursor="pointer";
+      caret.onclick=function(){ scEditOpen=-1; renderScen(); };   // collapse
+      head.appendChild(caret);
+      var num=document.createElement("span"); num.className="scnum"; num.textContent=(i+1)+"."; head.appendChild(num);
+      var doSel=document.createElement("select"); doSel.className="scfield";
+      ["narrate","say","system","think","musethink","transform","execaction","sleep","sleeptalk","wake"].forEach(function(dd){
+        var o=document.createElement("option"); o.value=dd; o.textContent=doLabel(dd); if(d===dd) o.selected=true; doSel.appendChild(o);
+      });
+      doSel.onchange=function(){ b.do=doSel.value; renderScen(); };
+      head.appendChild(doSel);
+    } else {
+      var caret2=document.createElement("span"); caret2.className="sccaret"; caret2.textContent="▸"; head.appendChild(caret2);
+      var num2=document.createElement("span"); num2.className="scnum"; num2.textContent=(i+1)+"."; head.appendChild(num2);
+      var sum=document.createElement("span"); sum.className="scbeatsum"; sum.innerHTML='<b>'+esc(doShort(d))+'</b>'+esc(beatSummary(b));
+      head.appendChild(sum);
+      head.style.cursor="pointer";
+      head.onclick=function(e){ if(e.target.closest(".scbtnmini")) return; scEditOpen=i; renderScen(); };   // expand
+    }
+    var sp=document.createElement("span"); sp.className="scspacer"; head.appendChild(sp);
+    var up=document.createElement("button"); up.className="scbtnmini"; up.textContent="↑"; up.disabled=(i===0);
+    up.onclick=function(e){ e.stopPropagation(); if(i>0){ var t=beats[i-1]; beats[i-1]=beats[i]; beats[i]=t; if(scEditOpen===i)scEditOpen=i-1; else if(scEditOpen===i-1)scEditOpen=i; renderScen(); } }; head.appendChild(up);
+    var dn=document.createElement("button"); dn.className="scbtnmini"; dn.textContent="↓"; dn.disabled=(i===beats.length-1);
+    dn.onclick=function(e){ e.stopPropagation(); if(i<beats.length-1){ var t=beats[i+1]; beats[i+1]=beats[i]; beats[i]=t; if(scEditOpen===i)scEditOpen=i+1; else if(scEditOpen===i+1)scEditOpen=i; renderScen(); } }; head.appendChild(dn);
+    var rm=document.createElement("button"); rm.className="scbtnmini"; rm.textContent="✕";
+    rm.onclick=function(e){ e.stopPropagation(); beats.splice(i,1); if(scEditOpen>beats.length-1) scEditOpen=beats.length-1; renderScen(); }; head.appendChild(rm);
+    card.appendChild(head);
+
+    if(!open) return card;   // collapsed: header only
+
+    var f=beatFields(d);
+    if(f.speaker){ card.appendChild(scLabel("speaker")); var si=scActorInput(b.speaker); si.oninput=function(){ b.speaker=si.value; }; card.appendChild(si); }
+    if(f.target){ card.appendChild(scLabel(f.speaker ? "target" : (d==="execaction" ? "performer" : "actor"))); var ti=scActorInput(b.target); ti.oninput=function(){ b.target=ti.value; }; card.appendChild(ti); }
+    if(d==="execaction"){ buildExecFields(b, card); }
+    if(f.text){ card.appendChild(scLabel("text")); var tx=scTextarea(b.text); tx.oninput=function(){ b.text=tx.value; }; card.appendChild(tx); }
+    if(f.improvise || f.wait){
+      var row=document.createElement("div"); row.className="scfrow";
+      if(f.improvise){ var lab=document.createElement("label"); lab.className="scchk"; var cb=document.createElement("input"); cb.type="checkbox"; cb.checked=!!b.improvise; cb.onchange=function(){ b.improvise=cb.checked; }; lab.appendChild(cb); lab.appendChild(document.createTextNode(" improvise (LLM rewrites)")); row.appendChild(lab); }
+      if(f.wait){ var ww=document.createElement("div"); ww.appendChild(scLabel("wait")); var wi=scInput(b.wait==null?"":b.wait, "speech | ms | blank"); wi.oninput=function(){ var v=wi.value.trim(); if(v===""){ delete b.wait; } else if(v==="speech"){ b.wait="speech"; } else { var n=parseInt(v,10); if(!isNaN(n)) b.wait=n; } }; ww.appendChild(wi); row.appendChild(ww); }
+      card.appendChild(row);
+    }
+    return card;
+  }
+
   // Restore the speaker/target pairing across panel close/reopen (persisted in localStorage).
   try{ var _p=JSON.parse(localStorage.getItem("pwPair")||"null");
     if(_p){ state.speaker=_p.s||null; state.speakerName=state.speaker?(_p.sn||"none"):"You"; state.target=_p.t||null; state.targetName=_p.tn||"none"; } }catch(e){}
