@@ -1,4 +1,4 @@
-# Playwright — v0.9
+# Playwright — v0.10
 
 ![Playwright — Direct the Scene](mod/fomod/playwright.jpg)
 
@@ -22,6 +22,12 @@ crosshair aiming, multi-word names just work.
 > **v0.9** adds a **⚙ Settings** window (header button): a **text-size** control
 > (A−/A+/Reset, scales the panel's fonts only) and a **background-opacity** slider that
 > fades the panel and the conversation log together. Both persist across sessions.
+
+> **v0.10** adds a per-NPC **action launcher**: each actor's ⋯ menu gains an
+> **Actions…** entry that opens a window listing SkyrimNet's registered actions, each
+> with a parameter form (actor-picker dropdowns where they apply) to fire it at that
+> actor — open several at once, they stay until closed. **Narrate** is also more
+> reliable: it routes through the nearest nearby NPC so the scene actually perceives it.
 
 ## The As / To model
 
