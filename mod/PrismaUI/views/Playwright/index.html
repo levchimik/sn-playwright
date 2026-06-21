@@ -1217,6 +1217,7 @@
       state.director = !!d.directorMode;
       state.pause = !!d.pauseGame;
       state.whisper = !!d.whisper;
+      if("continuous" in d) state.continuous = !!d.continuous;       // SkyrimNet continuous-scene mode (live, gamemaster-status)
       if("gamemaster" in d) state.gamemaster = !!d.gamemaster;       // SkyrimNet GameMaster agent on/off (config-mirrored)
       if("npcReactions" in d) state.npcReactions = !!d.npcReactions; // NPC reactions to world events on/off (config-mirrored)
       state.telepathy = ("telepathy" in d) ? !!d.telepathy : true;  // player owns a SkyrimNet Telepathy perk -> log shows NPC thoughts
@@ -1523,9 +1524,12 @@
   // Continuous (autonomous-scene) mode is a SkyrimNet global. Fire its toggle and flip
   // optimistically; SkyrimNet only acts on it when GameMaster is enabled.
   function toggleContinuous(){
-    send("continuous||");
-    state.continuous = !state.continuous;
-    render();
+    send("continuous||");                  // SkyrimNet acts -- or shows "needs GameMaster" and ignores it
+    if(state.gamemaster){                  // Auto only takes effect when GameMaster is on; don't fake the
+      state.continuous = !state.continuous; // optimistic flip otherwise (SkyrimNet rejects it, pill would lie)
+      render();
+    }
+    scheduleRefresh();   // DLL re-reads continuous_scene_mode and confirms the real state
   }
 
   // GameMaster + NPC reactions are SkyrimNet globals mirrored from its config. Fire the

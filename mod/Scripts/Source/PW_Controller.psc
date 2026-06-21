@@ -664,7 +664,15 @@ Function OnPrismaCommand(String eventName, String strArg, Float numArg, Form akS
     ElseIf action == "gamemaster"
         SkyrimNetApi.TriggerToggleGameMaster()           ; global: GameMaster agent on/off (config-backed)
     ElseIf action == "npcreact"
-        SkyrimNetApi.TriggerToggleWorldEventReactions()  ; global: NPC reactions to world events on/off
+        ; Toggle NPC world-event reactions via the CONFIG -- the key the DLL reads and the
+        ; SkyrimNet dashboard writes. (TriggerToggleWorldEventReactions flips a live
+        ; in-memory flag that is NOT config-backed and has no readable status endpoint, so the
+        ; panel pill could never mirror it -- it stayed stuck "on".)
+        If SkyrimNetApi.GetConfigBool("Events", "global.npcReactionsEnabled", true)
+            SkyrimNetApi.PatchConfig("Events", "{\"global\":{\"npcReactionsEnabled\":false}}")
+        Else
+            SkyrimNetApi.PatchConfig("Events", "{\"global\":{\"npcReactionsEnabled\":true}}")
+        EndIf
     ElseIf action == "continarrate"
         SkyrimNetApi.TriggerContinueNarration()          ; global: let the speaker selector continue the scene
     ElseIf action == "musethink"

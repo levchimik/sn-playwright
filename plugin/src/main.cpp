@@ -72,15 +72,17 @@ namespace
     std::atomic<float> g_normalDist{1600.0f};      // interaction.normalMaxDistance
     std::atomic<float> g_whisperDist{200.0f};      // interaction.whisperMaxDistance
     std::atomic<bool>  g_whisperOn{false};         // active radius ~= whisper radius
+    std::atomic<bool>  g_continuousOn{false};      // gamemaster-status continuous_scene_mode (live)
     // get_nearby_npc_list's awareness distance = interaction.maxDistance * this; we pass it to
     // nearby-actors so our cast == SkyrimNet's "available to speak with" set.
     std::atomic<float> g_awarenessMult{2.0f};      // interaction.nearbyNPCAwarenessMultiplier
 
     // GameMaster + world-event-reaction state, mirrored from SkyrimNet config so the panel
     // pills show the real on/off (and stay correct even when toggled via SkyrimNet's own
-    // hotkeys). GameMaster: game-config gamemaster.enabled. NPC reactions: Events-config
+    // hotkeys). GameMaster: live gamemaster-status agent_enabled (the runtime agent toggle,
+    // NOT static config gamemaster.enabled). NPC reactions: Events-config
     // global.npcReactionsEnabled. Defaults match SkyrimNet's stock (both on).
-    std::atomic<bool> g_gamemasterOn{true};    // gamemaster.enabled
+    std::atomic<bool> g_gamemasterOn{true};    // gamemaster-status agent_enabled
     std::atomic<bool> g_npcReactionsOn{true};  // Events global.npcReactionsEnabled
 
     // Snapshot of SkyrimNet's nearby/addressable cast (from /game-data?api=nearby-actors), refreshed
@@ -839,6 +841,8 @@ namespace
         json += g_pauseGame ? "true" : "false";
         json += ",\"whisper\":";
         json += g_whisperOn.load() ? "true" : "false";
+        json += ",\"continuous\":";
+        json += g_continuousOn.load() ? "true" : "false";
         json += ",\"gamemaster\":";
         json += g_gamemasterOn.load() ? "true" : "false";
         json += ",\"npcReactions\":";
@@ -970,16 +974,10 @@ namespace
                 if (mult > 0.0f) {
                     g_awarenessMult.store(mult);
                 }
-                // GameMaster on/off lives in the same game-config blob. "enabled" recurs in
-                // many sections (narration, spatialAudio, dbvo...), so scope the search to the
-                // "gamemaster" object to read gamemaster.enabled specifically.
-                const size_t gp = cfg.find("\"gamemaster\"");
-                if (gp != std::string::npos) {
-                    const int en = JsonBool(cfg, "enabled", -1, gp);
-                    if (en >= 0) {
-                        g_gamemasterOn.store(en == 1);
-                    }
-                }
+                // (GameMaster on/off is read from the LIVE status endpoint below, not here:
+                // gamemaster.enabled in /config is a static master switch that never moves;
+                // TriggerToggleGameMaster flips the live AGENT, which surfaces only as
+                // agent_enabled in /?api=gamemaster-status -- same as whisper_mode.)
             }
             // (1b) NPC world-event reactions live in the Events config group (global section).
             const std::string ev = HttpRequest(L"GET", CONFIG_EVENTS_PATH, "");
@@ -990,12 +988,21 @@ namespace
                     g_npcReactionsOn.store(en == 1);
                 }
             }
-            // (2) Live whisper on/off -- the runtime toggle only shows up here, not in /config.
+            // (2) Live whisper + GameMaster-agent on/off -- these runtime toggles only show up
+            //     here, not in /config (whisper_mode / agent_enabled in gamemaster-status).
             const std::string gm = HttpRequest(L"GET", GM_STATUS_PATH, "");
             if (!gm.empty()) {
                 const int wm = JsonBool(gm, "whisper_mode", -1);
                 if (wm >= 0) {
                     g_whisperOn.store(wm == 1);
+                }
+                const int ae = JsonBool(gm, "agent_enabled", -1);
+                if (ae >= 0) {
+                    g_gamemasterOn.store(ae == 1);
+                }
+                const int cm = JsonBool(gm, "continuous_scene_mode", -1);
+                if (cm >= 0) {
+                    g_continuousOn.store(cm == 1);
                 }
             }
             // Effective range follows the live state, using the static radii.
