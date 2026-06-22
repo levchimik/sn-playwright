@@ -1,4 +1,4 @@
-# Playwright — v0.11
+# Playwright — v0.12
 
 ![Playwright — Direct the Scene](mod/fomod/playwright.jpg)
 
@@ -36,6 +36,12 @@ crosshair aiming, multi-word names just work.
 > System) are hidden; only created entities show. Also adds a **cast name filter** to
 > find anyone when the list is crowded, and a **📋 Copy builder prompt** button that
 > hands any LLM everything it needs to write a Playwright scenario.
+
+> **v0.12** makes a **transformed player Think** use what you typed. Your gist used to be
+> discarded (the LLM free-associated from the scene); now it drives the inner thought — the
+> thought **keeps your words** and continues them with an in-voice reaction, with full scene
+> context. Done via a gated `player_thoughts.prompt` override (the native thought path, so
+> ordinary thoughts are byte-for-byte unchanged).
 
 ## The As / To model
 

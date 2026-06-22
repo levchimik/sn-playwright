@@ -608,13 +608,24 @@ EndFunction
 Function ThinkPlayer(String thought, Bool xform)
     Actor pl = Game.GetPlayer()
     If xform
-        ; Transform ON: SkyrimNet's own player-thought generation (the player parallel of
-        ; ThinkLLM/GenerateNPCThought), the way the SkyrimNet thought hotkey produces a thought.
-        ; NOTE: TriggerPlayerThought takes no text -- no exposed API seeds a player thought with a
-        ; typed gist -- so the composed line is NOT used here; the thought is generated from scene
-        ; context. (If we ever want the gist to drive it, that needs a SendCustomPromptToLLM round-trip.)
-        SkyrimNetApi.TriggerPlayerThought()
-        Debug.Notification("You think (LLM)")
+        ; Transform ON: drive the thought with the typed gist. TriggerPlayerThought() is a no-arg native
+        ; (can't seed a topic) and SkyrimNet's player_thoughts prompt can't be rendered out-of-band (it
+        ; needs engine-bound npc/scene -> decorator cascade). So we stash the gist in a StorageUtil value
+        ; and let the NATIVE thought run: Playwright's player_thoughts.prompt override reads PW_MuseGist
+        ; into the template's `promptForThoughts` slot, so the thought is about our gist WITH full native
+        ; context. Clear it right after so a later autonomous/native thought doesn't reuse a stale topic.
+        ; (The render is synchronous within TriggerPlayerThought; the brief wait is belt-and-suspenders.)
+        If thought != ""
+            StorageUtil.SetStringValue(None, "PW_MuseGist", thought)
+            SkyrimNetApi.TriggerPlayerThought()
+            Utility.Wait(1.0)
+            StorageUtil.SetStringValue(None, "PW_MuseGist", "")
+            Debug.Notification("You muse on it...")
+        Else
+            StorageUtil.SetStringValue(None, "PW_MuseGist", "")  ; no topic -> clear any stale gist
+            SkyrimNetApi.TriggerPlayerThought()                  ; stock autonomous thought
+            Debug.Notification("You think (LLM)")
+        EndIf
     ElseIf thought != ""
         ; Transform OFF: your exact words logged as a player_thoughts event AND voiced aloud via
         ; TriggerPlayerTTS (direct TTS -- no LLM, no extra event; the same voice path as player Say).
