@@ -1656,6 +1656,12 @@ namespace
             return be->GetDevice() == RE::INPUT_DEVICE::kMouse &&
                    (be->GetIDCode() == kMouseLeft || be->GetIDCode() == kMouseRight) && !be->IsUp();
         }
+        // Escape, while the panel owns focus: dropped so closing the panel can't ALSO open the
+        // game's pause/journal menu underneath -- the two racing left input dead and the game paused.
+        static bool DropEscape(RE::ButtonEvent* be)
+        {
+            return be->GetDevice() == RE::INPUT_DEVICE::kKeyboard && be->GetIDCode() == 0x01 /* DIK_ESCAPE */;
+        }
 
         // The panel's keyboard keys (DirectInput scancodes). Returns the JS name the view's
         // pwKey() expects, or nullptr for everything else. Digits 1-4 arm an action / 0 swaps
@@ -1780,6 +1786,40 @@ namespace
                     } else if (be->IsUp() && g_lookMode.load()) {
                         ExitLook();
                     }
+                }
+            }
+            // 1b) Escape while the panel owns focus: exit the text box (if typing) else close the
+            //     panel, and DROP the key here so it can't ALSO reach MenuControls and open the
+            //     pause/journal menu underneath. A BSTEventSink can't block input, so the old
+            //     EscInputSink collapsed the panel but the same Escape still opened the journal --
+            //     the two raced and left input dead with the game stuck paused. Unlinking it in the
+            //     dispatch hook (before any sink) is the only way to actually suppress it. Gated on
+            //     HasFocus (what EscInputSink used), so it supersedes that sink cleanly.
+            if (a_evns) {
+                bool escDown = false;
+                for (auto* e = *a_evns; e; e = e->next) {
+                    if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) {
+                        continue;
+                    }
+                    auto* be = e->AsButtonEvent();
+                    if (be && be->GetDevice() == RE::INPUT_DEVICE::kKeyboard &&
+                        be->GetIDCode() == 0x01 /* DIK_ESCAPE */ && be->IsDown()) {
+                        escDown = true;
+                        break;
+                    }
+                }
+                if (escDown && g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view) &&
+                    g_prisma->HasFocus(g_view)) {
+                    if (g_typing.load()) {
+                        SKSE::GetTaskInterface()->AddTask([]() {
+                            if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
+                                g_prisma->InteropCall(g_view, "pwBlurText", "");
+                            }
+                        });
+                    } else {
+                        CollapseFromCode();
+                    }
+                    Unlink(a_evns, &DropEscape);
                 }
             }
             // 2) Panel navigation keys: swallow + forward to the view (always, regardless of
