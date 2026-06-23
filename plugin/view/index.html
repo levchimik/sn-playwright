@@ -81,6 +81,11 @@
      director dot). It's a read-only float while collapsed -- the view only takes mouse input when
      focused, so scroll/edit need the panel open, but new lines keep streaming in. */
   body.ingame.logpersist.logopen #log{display:flex;}
+  /* CRITICAL: while collapsed, the persistent log must NOT capture the mouse. The view is click-through
+     except over pointer-events:auto islands; a big always-visible island during gameplay eats clicks and
+     makes the game suppress the HUD/crosshair ("mouse stops working / UI disappears", the v0.12 regression).
+     So it's a click-through readout while collapsed; it becomes interactive again when the panel is open. */
+  body:not(.open) #log, body:not(.open) #log *{pointer-events:none;}
   .loghead{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);cursor:move;}
   .loghead .title{flex:1;font-size:calc(15px*var(--fs));letter-spacing:2px;color:var(--accent2);font-weight:600;}
   #logList{flex:1;overflow-y:auto;padding:6px 10px;}
@@ -746,16 +751,17 @@
   }
 
   // Conversation-log persistence (Settings toggle). When on, the log auto-opens AND stays visible even
-  // when the panel is collapsed to the dot (the "logpersist" body class drives the CSS); it survives
-  // restarts too. Defaults ON (opt out via the toggle). The 💬 button still works ad-hoc within a session.
-  var logPersist=true; try{ var _lp=localStorage.getItem("pwLogPersist"); if(_lp!==null) logPersist=(_lp==="1"); }catch(e){}
+  // when the panel is collapsed to the dot (a click-through readout -- see the pointer-events rule). It
+  // survives restarts. Defaults OFF (opt in) -- default-on shipped a big always-on overlay that ate mouse
+  // input for users who didn't want it (the v0.12 regression). The 💬 button still works ad-hoc.
+  var logPersist=false; try{ var _lp=localStorage.getItem("pwLogPersist"); if(_lp!==null) logPersist=(_lp==="1"); }catch(e){}
   function setLogOpen(want){ if(!!document.body.classList.contains("logopen") !== !!want) toggleLog(); }
   function applyLogPersist(){ document.body.classList.toggle("logpersist", logPersist); updateLogPersistUI(); }
   function updateLogPersistUI(){ var t=document.getElementById("logPersistToggle"); if(t){ t.textContent=logPersist?"on":"off"; t.className="pill"+(logPersist?" on":""); } }
   function toggleLogPersist(){
     logPersist=!logPersist;
     try{ localStorage.setItem("pwLogPersist", logPersist?"1":"0"); }catch(e){}
-    if(logPersist) setLogOpen(true);   // turning it on opens the log right away
+    setLogOpen(logPersist);   // on -> open the log; off -> close it too, so disabling fully clears it
     applyLogPersist();
   }
 

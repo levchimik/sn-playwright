@@ -1,4 +1,4 @@
-# Playwright — v0.12.0
+# Playwright — v0.12.1-rc1
 
 ![Playwright — Direct the Scene](mod/fomod/playwright.jpg)
 
@@ -53,6 +53,11 @@ crosshair aiming, multi-word names just work.
 > (it no longer eats the key), the log no longer floats on the **main menu**, the cast list survives a
 > malformed actor entry (hardened JSON parsing) and shows up to 50 nearby (was 30), with a **stale**
 > warning if SkyrimNet stops responding.
+
+> **v0.12.1-rc1** fixes a regression from the persistent log: with it on, the conversation log floated
+> over the game while the panel was closed and **captured the mouse** — clicks stopped working and the
+> HUD vanished. The collapsed log is now **click-through**, the toggle is **off by default**, and turning
+> it off fully closes the log.
 
 ## The As / To model
 
