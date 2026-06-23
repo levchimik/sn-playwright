@@ -77,6 +77,10 @@
     border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);
     opacity:0.6;border-bottom-right-radius:3px;}
   body.open.logopen #log{display:flex;}
+  /* Persistent mode: the log stays visible even when the panel is collapsed to the dot (like the
+     director dot). It's a read-only float while collapsed -- the view only takes mouse input when
+     focused, so scroll/edit need the panel open, but new lines keep streaming in. */
+  body.ingame.logpersist.logopen #log{display:flex;}
   .loghead{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);cursor:move;}
   .loghead .title{flex:1;font-size:calc(15px*var(--fs));letter-spacing:2px;color:var(--accent2);font-weight:600;}
   #logList{flex:1;overflow-y:auto;padding:6px 10px;}
@@ -106,6 +110,11 @@
   .fsbtn{cursor:pointer;font-size:calc(12px*var(--fs));min-width:30px;text-align:center;padding:3px 9px;border-radius:6px;border:1px solid var(--line);color:var(--fg);background:var(--bg2);font-weight:700;}
   .fsbtn:hover{border-color:var(--accent);color:var(--accent);}
   .fsval{font-size:calc(12px*var(--fs));color:var(--accent2);min-width:46px;text-align:center;font-weight:600;}
+  /* Settings labelled toggle row (label + description on the left, pill toggle on the right). */
+  .setrow{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:4px 12px 10px;}
+  .setlbl{display:flex;flex-direction:column;gap:3px;font-size:calc(12px*var(--fs));color:var(--fg);font-weight:600;}
+  .setlbl small{max-width:240px;color:var(--muted);font-size:calc(10px*var(--fs));font-weight:400;line-height:1.35;}
+  .setrow .pill{flex:none;margin-top:2px;min-width:30px;text-align:center;}
   /* Range slider (background opacity). */
   .pwslider{flex:1;-webkit-appearance:none;appearance:none;height:4px;border-radius:3px;background:var(--line);outline:none;cursor:pointer;}
   .pwslider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:50%;background:var(--accent);border:0;cursor:pointer;}
@@ -306,7 +315,10 @@
   .badge.pinned{background:rgba(230,145,60,0.22);color:#e89a55;}      /* SkyrimNet pinned */
   .badge.follower{background:rgba(120,190,120,0.20);color:#86cf86;}   /* player's follower */
   .badge.vebadge{background:rgba(160,120,200,0.22);color:#c3a0e0;}    /* virtual entity */
+  .badge.raw{background:rgba(150,150,160,0.16);color:#9aa0ac;font-style:italic;}  /* all-actors: not in SkyrimNet's eligible cast */
   .empty{color:var(--muted);font-size:calc(13px*var(--fs));text-align:center;padding:24px 12px;font-style:italic;}
+  /* Stale-list warning bar (SkyrimNet poll frozen). Sits atop the cast list. */
+  .stalebar{margin:4px 4px 8px;padding:6px 9px;border-radius:7px;background:rgba(201,161,74,0.14);border:1px solid rgba(201,161,74,0.32);color:var(--accent);font-size:calc(11px*var(--fs));line-height:1.35;}
   /* Virtual-entities section: a toggle header under the cast, then VE rows. */
   .vehdr{display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--muted);font-size:calc(12px*var(--fs));
          padding:7px 12px;border-top:1px solid var(--line);margin-top:2px;user-select:none;}
@@ -461,6 +473,16 @@
       <input id="opSlider" class="pwslider" type="range" min="20" max="100" step="5" value="92" oninput="setOpacity(this.value)" title="Panel background opacity">
       <span id="opLabel" class="fsval">92%</span>
     </div>
+    <div class="kgrp">Cast list</div>
+    <div class="setrow">
+      <span class="setlbl">All actors<small>List every loaded NPC nearby, including ones SkyrimNet filters out (tinted &ldquo;off-scene&rdquo;).</small></span>
+      <span id="allActorsToggle" class="pill" onclick="toggleAllActors()">off</span>
+    </div>
+    <div class="kgrp">Conversation log</div>
+    <div class="setrow">
+      <span class="setlbl">Persistent log<small>Keep the log on screen even when the panel is collapsed.</small></span>
+      <span id="logPersistToggle" class="pill" onclick="toggleLogPersist()">off</span>
+    </div>
   </div>
 </div>
 
@@ -485,6 +507,12 @@
   window.pwScenarioSave    = window.pwScenarioSave    || function(){};
   window.pwScenarioDelete  = window.pwScenarioDelete  || function(){};
 
+  // Called by C++ when a save loads / unloads. Gates the persistent log so it doesn't float on the
+  // main menu (the view is created at kDataLoaded, i.e. title-screen time, before any save is loaded).
+  window.pwSetIngame = function(v){
+    document.body.classList.toggle("ingame", v==="1"||v===1||v===true);
+  };
+
   // Called by C++ (InteropCall) to expand the full panel or collapse to the dot.
   window.pwSetOpen = function(v){
     var open = (v==="1"||v===1||v===true);
@@ -493,6 +521,7 @@
     // open when you reopen the panel; the CSS just hides it while collapsed.
     if(open){
       try{ document.getElementById("kc").focus(); }catch(e){}
+      if(logPersist) setLogOpen(true);                                       // "Keep log open" -> reassert on every open
       if(document.body.classList.contains("logopen")) window.pwLogFetch("");  // refresh on reopen
     } else {
       // Closing: wipe the compose box. The Shift+key close combo reaches CEF too (keys aren't
@@ -716,6 +745,20 @@
     if(on) window.pwLogFetch("");
   }
 
+  // Conversation-log persistence (Settings toggle). When on, the log auto-opens AND stays visible even
+  // when the panel is collapsed to the dot (the "logpersist" body class drives the CSS); it survives
+  // restarts too. Defaults ON (opt out via the toggle). The 💬 button still works ad-hoc within a session.
+  var logPersist=true; try{ var _lp=localStorage.getItem("pwLogPersist"); if(_lp!==null) logPersist=(_lp==="1"); }catch(e){}
+  function setLogOpen(want){ if(!!document.body.classList.contains("logopen") !== !!want) toggleLog(); }
+  function applyLogPersist(){ document.body.classList.toggle("logpersist", logPersist); updateLogPersistUI(); }
+  function updateLogPersistUI(){ var t=document.getElementById("logPersistToggle"); if(t){ t.textContent=logPersist?"on":"off"; t.className="pill"+(logPersist?" on":""); } }
+  function toggleLogPersist(){
+    logPersist=!logPersist;
+    try{ localStorage.setItem("pwLogPersist", logPersist?"1":"0"); }catch(e){}
+    if(logPersist) setLogOpen(true);   // turning it on opens the log right away
+    applyLogPersist();
+  }
+
   // Controls/help window and Settings window: each toggled by its header button.
   // They share the same anchor, so opening one closes the other.
   function toggleHelp(){
@@ -753,7 +796,10 @@
   // it covers exactly the "directing while paused" case. pwSetLog's signature check makes the
   // no-change polls cheap (no DOM rebuild); we skip entirely while an inline editor is open.
   setInterval(function(){
-    if(!document.body.classList.contains("open")) return;       // panel collapsed -> log hidden
+    // Poll while the log is actually visible: panel expanded, OR persistent mode while in-game
+    // (log stays up while collapsed). Never at the main menu (no save loaded).
+    var persistVisible = document.body.classList.contains("logpersist") && document.body.classList.contains("ingame");
+    if(!document.body.classList.contains("open") && !persistVisible) return;
     if(!document.body.classList.contains("logopen")) return;    // log window not shown
     if(document.querySelector("#logList .ed")) return;          // mid-edit -> don't refetch under the editor
     window.pwLogFetch("");
@@ -778,11 +824,12 @@
       }
     }catch(e){}
     try{
-      if(localStorage.getItem("pwLogOpen")==="1"){
+      if(logPersist || localStorage.getItem("pwLogOpen")==="1"){   // "Keep log open" forces it even if last closed
         document.body.classList.add("logopen");
         document.getElementById("logBtn").classList.add("on");
       }
     }catch(e){}
+    applyLogPersist();   // set the logpersist body class (CSS keeps the log visible while collapsed)
     var dr=false,ox=0,oy=0;
     logHead.addEventListener("pointerdown",function(e){
       if(e.target.closest(".pill")||e.target.closest(".closebtn")) return; // let buttons work
@@ -917,7 +964,7 @@
     document.getElementById("dot").classList.toggle("on", (v==="1"||v===1||v===true));
   };
 
-  var state = { npcs:[], virtual:[], showVirtual:false, speaker:null, speakerName:"You", target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false, continuous:false, telepathy:true, gamemaster:true, npcReactions:true };
+  var state = { npcs:[], virtual:[], showVirtual:false, speaker:null, speakerName:"You", target:null, targetName:"none", director:false, pause:false, transform:false, whisper:false, continuous:false, telepathy:true, gamemaster:true, npcReactions:true, allActors:false, stale:false };
   try{ state.transform = localStorage.getItem("pwTransform")==="1"; }catch(e){}
 
   // --- Text scale (font-only) -----------------------------------------------
@@ -1857,7 +1904,8 @@
       var vrt = (d.virtual || []).filter(function(v){ return (v.mode||"") !== "system"; });
       var sig = (d.directorMode?1:0)+"|"+(d.pauseGame?1:0)+"|"+(d.whisper?1:0)+"|"+
                 (d.gamemaster?1:0)+"|"+(d.npcReactions?1:0)+"|"+(state.showVirtual?1:0)+"|"+
-                npcs.map(function(n){return n.id+":"+n.state+":"+n.dist+(n.player?"P":"")+(n.follower?"F":"")+(n.pinned?"X":"");}).join(",")+
+                (d.allActors?1:0)+"|"+(d.stale?1:0)+"|"+
+                npcs.map(function(n){return n.id+":"+n.state+":"+n.dist+(n.player?"P":"")+(n.follower?"F":"")+(n.pinned?"X":"")+(n.raw?"R":"");}).join(",")+
                 "|"+vrt.map(function(v){return v.name;}).join(",");
       state.npcs = npcs;
       state.virtual = vrt;
@@ -1867,6 +1915,8 @@
       if("continuous" in d) state.continuous = !!d.continuous;       // SkyrimNet continuous-scene mode (live, gamemaster-status)
       if("gamemaster" in d) state.gamemaster = !!d.gamemaster;       // SkyrimNet GameMaster agent on/off (config-mirrored)
       if("npcReactions" in d) state.npcReactions = !!d.npcReactions; // NPC reactions to world events on/off (config-mirrored)
+      if("allActors" in d) state.allActors = !!d.allActors;          // all-actors mode (local engine union) on/off
+      state.stale = !!d.stale;                                       // SkyrimNet poll frozen >4s -> cast may be stale
       state.telepathy = ("telepathy" in d) ? !!d.telepathy : true;  // player owns a SkyrimNet Telepathy perk -> log shows NPC thoughts
       state.radius = d.radius;   // meters; for the pill tooltip / label
       // Drop a selected speaker/target once they leave the nearby cast (walked off / unloaded).
@@ -1932,6 +1982,9 @@
     nr.textContent = "NPC React: " + (state.npcReactions ? "on" : "off");
     nr.className = "pill" + (state.npcReactions ? " on" : "");
 
+    var ap = document.getElementById("allActorsToggle");   // lives in the Settings panel now
+    if(ap){ ap.textContent = state.allActors ? "on" : "off"; ap.className = "pill" + (state.allActors ? " on" : ""); }
+
     // The ⋯ menu is a floating element outside the list, so rebuilding the rows leaves it in place.
     // We deliberately do NOT close or re-anchor it here -- it stays put until dismissed or its NPC
     // leaves the nearby cast (auto-closed in pwSetData).
@@ -1942,8 +1995,14 @@
     var fq = ((document.getElementById("npcFilter")||{}).value || "").trim().toLowerCase();
     document.getElementById("npcFilterBar").classList.toggle("active", !!fq);
     var matched = 0;
+    if(state.stale){
+      var sn = document.createElement("div");
+      sn.className = "stalebar";
+      sn.textContent = "⚠ SkyrimNet isn't responding — this list may be stale. Try All actors for a live engine view.";
+      box.appendChild(sn);
+    }
     if(!state.npcs.length){
-      box.innerHTML = '<div class="empty">No SkyrimNet people nearby.</div>';
+      box.appendChild(Object.assign(document.createElement("div"),{className:"empty",textContent:state.allActors?"No actors loaded nearby.":"No SkyrimNet people nearby."}));
     } else {
       state.npcs.forEach(function(n, idx){
         if(fq && String(n.name||"").toLowerCase().indexOf(fq)<0) return;   // filter by name
@@ -1957,6 +2016,7 @@
         if(n.pinned) badge += ' <span class="badge pinned">pinned</span>';
         if(n.follower) badge += ' <span class="badge follower">follower</span>';
         if(n.crosshair) badge += ' <span class="badge xhair">crosshair</span>';
+        if(n.raw) badge += ' <span class="badge raw" title="Not in SkyrimNet&apos;s eligible cast — pulled straight from the engine (all-actors mode). Engaging it makes SkyrimNet profile it on the fly.">off-scene</span>';
         if(state.speaker===n.id || (!state.speaker && n.player)) badge += ' <span class="badge spkr">As</span>'; // player performs by default (As)
         if(state.target===n.id)  badge += ' <span class="badge tgt">To</span>';
         var dist = (n.dist!=null && !n.player) ? '<span class="dist">'+n.dist+'m</span>' : '';
@@ -2221,6 +2281,14 @@
     state.pause = !state.pause;          // optimistic; next push confirms
     render();
     window.pwConfig("pause|" + (state.pause ? "1" : "0"));
+  }
+
+  // All-actors mode: union the local engine enumeration into the cast (Playwright-local, like Pause).
+  // The DLL flips the flag, persists it, and re-pushes immediately, so the list updates on the next tick.
+  function toggleAllActors(){
+    state.allActors = !state.allActors;  // optimistic; next push confirms
+    render();
+    window.pwConfig("allactors|" + (state.allActors ? "1" : "0"));
   }
 
   // One-shot: cut off all in-progress NPC speech + pending generation. Not a state

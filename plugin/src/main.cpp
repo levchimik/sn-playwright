@@ -47,8 +47,14 @@ namespace
 
     bool              g_pauseGame = false;   // manual "Pause" pill, persisted (ini [Behavior] PauseGame)
     bool              g_captureKeys = false; // [Behavior] CaptureKeys: steal keys from other mods while open
+    std::atomic<bool> g_allActors{false};    // [Behavior] AllActors: union the local engine enumeration into the
+                                             // cast so SkyrimNet-ineligible/unprofiled actors (generics, voiceless)
+                                             // show up too -- read on the main thread, flipped from the CEF thread
+    int               g_maxCast = 50;        // [Behavior] MaxCast: max rows in the cast list (nearest first)
     std::atomic<bool> g_typing{false};       // transient: the panel's text box currently has focus
     std::atomic<bool> g_panelOpen{false};    // panel expanded + focused (vs collapsed to the corner dot)
+    std::atomic<bool> g_inGame{false};       // a save is loaded / player is in the world (false at the main menu).
+                                             // Gates the persistent conversation log so it doesn't float on the title screen.
     std::atomic<bool> g_lookMode{false};     // RMB held: panel temporarily unfocused so you can look + move
     RE::Setting*      g_alwaysRun = nullptr; // "bAlwaysRunByDefault:Controls" (cached) -- read for run/walk resync
     bool              g_appliedPause = false; // pause value currently in effect on the live view
@@ -99,6 +105,8 @@ namespace
     std::mutex               g_sceneMutex;
     std::vector<SceneActor>  g_scene;            // guarded by g_sceneMutex
     std::atomic<bool>        g_sceneValid{false};  // a SkyrimNet fetch has succeeded at least once
+    std::atomic<std::uint64_t> g_lastSceneOk{0};   // GetTickCount64() of the last successful nearby-actors fetch
+                                                   // (0 = never); drives the "stale list" flag in BuildNpcJson
 
     // SkyrimNet virtual entities (Game Master / Narrator / custom registered ones). Non-physical
     // speakers addressed by entity UUID (not Actor). We enumerate the ENABLED ones from
@@ -717,6 +725,8 @@ namespace
         bool        pinned = false;    // member of SkyrimNet's "Pinned" group
         std::string factions = "[]";   // JSON array of matched "faction:..." showWhen tokens (npc.fx)
         std::string uuid = "";         // SkyrimNet entity UUID (for /actions?api=eligibility); "" if unknown
+        bool        raw = false;       // came from the local engine enumeration, NOT SkyrimNet's cast
+                                       // (all-actors mode: SkyrimNet-ineligible/unprofiled -- UI tints these)
     };
 
     // Refresh SkyrimNet's "Pinned" NPC group (dashboard pins) into g_pinnedUuids. Two cheap localhost
@@ -789,6 +799,66 @@ namespace
     void FetchVirtualBlocking();                       // defined just below FetchSceneBlocking (called from it)
     void ResolveVeUuids(std::vector<VirtualEnt>&);     // fills VE real UUIDs (defined below FetchVirtualBlocking)
 
+    // Split the JSON array that follows "key" into its top-level {...} object substrings. Brace- AND
+    // quote-aware: a '}' or ']' inside a string value, or a nested object, no longer desyncs the walk
+    // (the old find('}') / find(']') scan assumed every object was flat and would silently drop the
+    // rest of the array the moment one wasn't). Returns [] if the key/array isn't present.
+    std::vector<std::string> JsonObjectsInArray(const std::string& s, const char* key)
+    {
+        std::vector<std::string> out;
+        const size_t kp = s.find(key);
+        if (kp == std::string::npos) {
+            return out;
+        }
+        const size_t lb = s.find('[', kp);
+        if (lb == std::string::npos) {
+            return out;
+        }
+        const size_t n = s.size();
+        size_t i = lb + 1;
+        while (i < n) {
+            while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r' || s[i] == ',')) {
+                ++i;
+            }
+            if (i >= n || s[i] == ']') {
+                break;  // end of array
+            }
+            if (s[i] != '{') {
+                ++i;
+                continue;  // unexpected token between objects -- skip it
+            }
+            const size_t start = i;
+            int depth = 0;
+            bool inStr = false, esc = false;
+            for (; i < n; ++i) {
+                const char c = s[i];
+                if (inStr) {
+                    if (esc) {
+                        esc = false;
+                    } else if (c == '\\') {
+                        esc = true;
+                    } else if (c == '"') {
+                        inStr = false;
+                    }
+                } else if (c == '"') {
+                    inStr = true;
+                } else if (c == '{') {
+                    ++depth;
+                } else if (c == '}') {
+                    if (--depth == 0) {
+                        out.push_back(s.substr(start, i - start + 1));
+                        ++i;
+                        break;
+                    }
+                }
+            }
+            if (depth != 0) {
+                break;  // truncated object -> stop rather than emit garbage
+            }
+        }
+        return out;
+    }
+
     // Pull SkyrimNet's nearby/addressable cast and cache it in g_scene. Runs OFF the main thread (HTTP).
     //
     // /game-data?api=nearby-actors is a lightweight, reliable data query (unlike the render-template
@@ -813,45 +883,30 @@ namespace
             "/game-data?api=nearby-actors&radius=" + std::to_string(static_cast<int>(r + 0.5f));
         const std::string resp = HttpRequest(L"GET", path, "");
 
-        const size_t ap = resp.find("\"actors\"");
-        if (resp.empty() || ap == std::string::npos) {
+        if (resp.empty() || resp.find("\"actors\"") == std::string::npos) {
             return;  // server off / bad response -> keep last good list
         }
         std::vector<SceneActor> scene;
-        const size_t lb = resp.find('[', ap);
-        const size_t rb = (lb != std::string::npos) ? resp.find(']', lb) : std::string::npos;
-        if (lb != std::string::npos && rb != std::string::npos) {
-            size_t pos = lb + 1;
-            for (;;) {
-                const size_t os = resp.find('{', pos);
-                if (os == std::string::npos || os > rb) {
-                    break;
-                }
-                const size_t oe = resp.find('}', os);  // actor objects are flat -- no nested braces
-                if (oe == std::string::npos || oe > rb) {
-                    break;
-                }
-                const std::string obj = resp.substr(os, oe - os + 1);
-                pos = oe + 1;
-                if (JsonBool(obj, "isPlayer", 0) == 1) {
-                    continue;  // player is rendered separately
-                }
-                const std::string fid = JsonStr(obj, "formID");
-                if (fid.empty()) {
-                    continue;
-                }
-                const auto formID = static_cast<std::uint32_t>(std::strtoul(fid.c_str(), nullptr, 16));  // hex
-                if (formID == 0) {
-                    continue;
-                }
-                scene.push_back(SceneActor{ formID, JsonStr(obj, "name"), JsonNum(obj, "distance", 0, 0.0f), JsonStr(obj, "uuid") });
+        for (const auto& obj : JsonObjectsInArray(resp, "\"actors\"")) {
+            if (JsonBool(obj, "isPlayer", 0) == 1) {
+                continue;  // player is rendered separately
             }
+            const std::string fid = JsonStr(obj, "formID");
+            if (fid.empty()) {
+                continue;
+            }
+            const auto formID = static_cast<std::uint32_t>(std::strtoul(fid.c_str(), nullptr, 16));  // hex
+            if (formID == 0) {
+                continue;
+            }
+            scene.push_back(SceneActor{ formID, JsonStr(obj, "name"), JsonNum(obj, "distance", 0, 0.0f), JsonStr(obj, "uuid") });
         }
         {
             std::lock_guard<std::mutex> lock(g_sceneMutex);
             g_scene.swap(scene);
         }
         g_sceneValid.store(true);
+        g_lastSceneOk.store(GetTickCount64());  // stamp success -> BuildNpcJson can flag a stale (frozen) list
         FetchPinnedBlocking();  // refresh SkyrimNet's "Pinned" group alongside the cast (cheap localhost)
         FetchVirtualBlocking(); // refresh enabled virtual entities alongside the cast (cheap localhost)
     }
@@ -864,39 +919,23 @@ namespace
     void FetchVirtualBlocking()
     {
         const std::string resp = HttpRequest(L"GET", "/config?api=get&name=VirtualEntities", "");
-        const size_t ap = resp.find("\"entities\"");
-        if (resp.empty() || ap == std::string::npos) {
+        if (resp.empty() || resp.find("\"entities\"") == std::string::npos) {
             return;  // server off / bad response -> keep last good list
         }
         std::vector<VirtualEnt> ents;
-        const size_t lb = resp.find('[', ap);
-        const size_t rb = (lb != std::string::npos) ? resp.find(']', lb) : std::string::npos;
-        if (lb != std::string::npos && rb != std::string::npos) {
-            size_t pos = lb + 1;
-            for (;;) {
-                const size_t os = resp.find('{', pos);
-                if (os == std::string::npos || os > rb) {
-                    break;
-                }
-                const size_t oe = resp.find('}', os);  // entity objects are flat -- no nested braces
-                if (oe == std::string::npos || oe > rb) {
-                    break;
-                }
-                const std::string obj = resp.substr(os, oe - os + 1);
-                pos = oe + 1;
-                if (JsonBool(obj, "enabled", 0) != 1) {
-                    continue;  // respect disabled virtual entities
-                }
-                std::string en = JsonStr(obj, "entityName");
-                std::string dn = JsonStr(obj, "displayName");
-                if (dn.empty()) {
-                    dn = en;
-                }
-                if (dn.empty()) {
-                    continue;
-                }
-                ents.push_back(VirtualEnt{ en, dn, JsonStr(obj, "voiceId"), JsonStr(obj, "conversationMode"), "" });
+        for (const auto& obj : JsonObjectsInArray(resp, "\"entities\"")) {
+            if (JsonBool(obj, "enabled", 0) != 1) {
+                continue;  // respect disabled virtual entities
             }
+            std::string en = JsonStr(obj, "entityName");
+            std::string dn = JsonStr(obj, "displayName");
+            if (dn.empty()) {
+                dn = en;
+            }
+            if (dn.empty()) {
+                continue;
+            }
+            ents.push_back(VirtualEnt{ en, dn, JsonStr(obj, "voiceId"), JsonStr(obj, "conversationMode"), "" });
         }
         ResolveVeUuids(ents);   // fill in each VE's real entity UUID (cached; one /characters fetch)
         {
@@ -976,13 +1015,16 @@ namespace
         }
 
         const float maxUnits = g_interactRadius.load();  // mirrors SkyrimNet's live interaction range
+        const bool  sceneOk = g_sceneValid.load();
+        const bool  allActors = g_allActors.load();
         std::vector<NpcEntry> entries;
+        std::vector<std::uint32_t> seen;  // formIDs already listed -- dedup the local union (cast is small, linear is fine)
+        const RE::NiPoint3 ppos = pc->GetPosition();
 
-        if (g_sceneValid.load()) {
+        if (sceneOk) {
             // PRIMARY: SkyrimNet decides membership (its nearby/addressable cast). We resolve each formID
             // to tag sleep state AND to measure the live distance ourselves from the actor's real position
             // (fresher than the fetch-time snapshot). sa.distUnits is only a backstop if the actor is gone.
-            const RE::NiPoint3 ppos = pc->GetPosition();
             std::vector<std::string> pinnedUuids;
             {
                 std::lock_guard<std::mutex> plk(g_pinnedMutex);
@@ -1022,50 +1064,75 @@ namespace
                     pinned,
                     fx,
                     sa.uuid });
+                seen.push_back(sa.formID);
             }
-        } else if (auto* lists = RE::ProcessLists::GetSingleton()) {
-            // FALLBACK (SkyrimNet web server unreachable): approximate locally.
-            const RE::NiPoint3 ppos = pc->GetPosition();
-            for (auto& handle : lists->highActorHandles) {
-                auto ptr = handle.get();
-                RE::Actor* a = ptr.get();
-                if (!a || a == pc || a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) {
-                    continue;
-                }
-                const char* dn = a->GetDisplayFullName();
-                if (!dn || !dn[0]) {
-                    continue;  // skip unnamed/generic actors (empty-name rows)
-                }
-                const float du = ppos.GetDistance(a->GetPosition());
-                if (du > maxUnits) {
-                    continue;
-                }
+        }
 
-                const char* st = "awake";
-                if (g_facAsleep && a->IsInFaction(g_facAsleep)) {
-                    st = "asleep";
-                } else if (g_facSleeptalk && a->IsInFaction(g_facSleeptalk)) {
-                    st = "sleeptalk";
+        // LOCAL UNION: in all-actors mode (or whenever SkyrimNet has never answered) walk the engine's
+        // own loaded-actor list and add anyone in range we don't already have. These are the actors
+        // SkyrimNet filtered out (no voice type) or hasn't profiled into nearby-actors yet -- exactly the
+        // generics users report missing. Marked raw=true when augmenting a real SkyrimNet list so the UI
+        // can tint them; a pure fallback (SkyrimNet offline) isn't "extra", so it stays unmarked.
+        if (allActors || !sceneOk) {
+            if (auto* lists = RE::ProcessLists::GetSingleton()) {
+                float lr = maxUnits * g_awarenessMult.load();  // match SkyrimNet's awareness radius (maxDistance * mult)
+                if (lr < 1.0f) {
+                    lr = 1.0f;
                 }
-
-                char idbuf[16];
-                std::snprintf(idbuf, sizeof(idbuf), "0x%08X", a->GetFormID());
-
-                entries.push_back(NpcEntry{
-                    JsonEsc(a->GetDisplayFullName()),
-                    idbuf,
-                    static_cast<int>(du / UNITS_PER_M + 0.5f),
-                    st,
-                    a->IsPlayerTeammate(),
-                    false,
-                    BuildFactionTags(a) });
+                for (auto& handle : lists->highActorHandles) {
+                    auto ptr = handle.get();
+                    RE::Actor* a = ptr.get();
+                    if (!a || a == pc || a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) {
+                        continue;
+                    }
+                    const std::uint32_t fid = a->GetFormID();
+                    bool dup = false;
+                    for (auto f : seen) {
+                        if (f == fid) {
+                            dup = true;
+                            break;
+                        }
+                    }
+                    if (dup) {
+                        continue;  // already in SkyrimNet's list -> keep its richer metadata (uuid/pinned)
+                    }
+                    const char* dn = a->GetDisplayFullName();
+                    if (!dn || !dn[0]) {
+                        continue;  // named actors only -- generics have names; blank-name rows aren't addressable
+                    }
+                    const float du = ppos.GetDistance(a->GetPosition());
+                    if (du > lr) {
+                        continue;
+                    }
+                    const char* st = "awake";
+                    if (g_facAsleep && a->IsInFaction(g_facAsleep)) {
+                        st = "asleep";
+                    } else if (g_facSleeptalk && a->IsInFaction(g_facSleeptalk)) {
+                        st = "sleeptalk";
+                    }
+                    char idbuf[16];
+                    std::snprintf(idbuf, sizeof(idbuf), "0x%08X", fid);
+                    NpcEntry ne;
+                    ne.name = JsonEsc(dn);
+                    ne.id = idbuf;
+                    ne.dist = static_cast<int>(du / UNITS_PER_M + 0.5f);
+                    ne.state = st;
+                    ne.follower = a->IsPlayerTeammate();
+                    ne.pinned = false;
+                    ne.factions = BuildFactionTags(a);
+                    ne.uuid = "";
+                    ne.raw = sceneOk;  // "extra" beyond SkyrimNet's list -> raw; pure offline fallback -> not
+                    entries.push_back(std::move(ne));
+                    seen.push_back(fid);
+                }
             }
         }
 
         std::sort(entries.begin(), entries.end(),
                   [](const NpcEntry& l, const NpcEntry& r) { return l.dist < r.dist; });
-        if (entries.size() > 30) {
-            entries.resize(30);
+        const size_t cap = g_maxCast > 0 ? static_cast<size_t>(g_maxCast) : 50;
+        if (entries.size() > cap) {
+            entries.resize(cap);
         }
 
         const bool director = g_facBlacklist && pc->IsInFaction(g_facBlacklist);
@@ -1091,6 +1158,16 @@ namespace
                     : "false";
         json += ",\"radius\":";
         json += std::to_string(static_cast<int>(maxUnits / UNITS_PER_M + 0.5f));
+        json += ",\"allActors\":";
+        json += allActors ? "true" : "false";
+        // Stale = SkyrimNet answered before but the 1 Hz poll has now been failing for >4 s, so the cast
+        // is frozen on an old snapshot. Suppressed in all-actors mode (the local union keeps it live).
+        json += ",\"stale\":";
+        {
+            const std::uint64_t lastOk = g_lastSceneOk.load();
+            const bool stale = sceneOk && !allActors && lastOk != 0 && (GetTickCount64() - lastOk > 4000);
+            json += stale ? "true" : "false";
+        }
         json += ",\"npcs\":[";
         // Player first -- selectable target for Deep Sleep / Sleep-talk (Self).
         {
@@ -1125,7 +1202,9 @@ namespace
             json += e.factions;
             json += ",\"uuid\":\"";
             json += e.uuid;
-            json += "\"}";
+            json += "\",\"raw\":";
+            json += e.raw ? "true" : "false";
+            json += "}";
         }
         json += "],\"virtual\":[";
         {
@@ -1480,6 +1559,30 @@ namespace
         PrismaModEventSink() = default;
     };
 
+    // Watch for the Main Menu opening (initial title screen OR quit-to-menu) so we can clear in-game
+    // state -- otherwise the persistent log keeps floating on the title screen after a quit-to-menu.
+    class MenuWatch : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+    {
+    public:
+        static MenuWatch* GetSingleton()
+        {
+            static MenuWatch instance;
+            return &instance;
+        }
+        RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event,
+                                              RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+        {
+            if (a_event && a_event->opening && a_event->menuName == RE::MainMenu::MENU_NAME) {
+                g_inGame.store(false);
+                PushInterop("pwSetIngame", "0");
+            }
+            return RE::BSEventNotifyControl::kContinue;
+        }
+
+    private:
+        MenuWatch() = default;
+    };
+
     void CollapseFromCode()  // close the panel from C++ (main thread)
     {
         SKSE::GetTaskInterface()->AddTask([]() {
@@ -1767,9 +1870,21 @@ namespace
             });
         }
 
+        // A vanilla dialogue (NPC conversation) is open. SkyrimNet drives the stock dialogue system,
+        // and Tab is its exit binding -- but while the panel owns input we swallow Tab (-> our action
+        // menu), so the player gets stuck unable to leave a conversation they opened Playwright during.
+        // While this menu is up we yield the keyboard entirely (nav + capture below), so Tab/arrows/Enter
+        // reach the dialogue; capture resumes the moment it closes.
+        static bool VanillaDialogueOpen()
+        {
+            auto* ui = RE::UI::GetSingleton();
+            return ui && ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME);
+        }
+
         static void Dispatch(RE::BSTEventSource<RE::InputEvent*>* a_dispatcher, RE::InputEvent** a_evns)
         {
             // Runs on the main thread (game loop). Reads atomics only -- PrismaUI calls are deferred.
+            const bool dlgOpen = VanillaDialogueOpen();  // yield the keyboard while an NPC conversation is up
             // 1) RMB transitions toggle look mode (only while the panel is open and not typing).
             if (a_evns) {
                 for (auto* e = *a_evns; e; e = e->next) {
@@ -1825,7 +1940,7 @@ namespace
             // 2) Panel navigation keys: swallow + forward to the view (always, regardless of
             //    CaptureKeys -- nav keys must never leak to other mods' hotkeys). Skipped while
             //    typing (the box needs them for editing) or in look mode.
-            if (g_panelOpen.load() && !g_typing.load() && !g_lookMode.load() &&
+            if (g_panelOpen.load() && !g_typing.load() && !g_lookMode.load() && !dlgOpen &&
                 g_prisma && g_viewReady.load()) {
                 HandleNavKeys(a_evns);
             }
@@ -1835,7 +1950,7 @@ namespace
             //    to gameplay/other mods (Tab opening OAR's menu, Delete reaching Modex, etc.). While
             //    NOT typing, swallow the non-nav keys only when CaptureKeys is on (the nav keys were
             //    already taken by HandleNavKeys above).
-            const bool kbFilter = g_panelOpen.load() && !g_lookMode.load() &&
+            const bool kbFilter = g_panelOpen.load() && !g_lookMode.load() && !dlgOpen &&
                                   (g_typing.load() || g_captureKeys);
             if (g_wasFiltering && !kbFilter) {
                 for (auto& b : g_owned) {  // leaving keyboard-capture: forget owned presses
@@ -1975,6 +2090,12 @@ namespace
             WritePrivateProfileStringA("Behavior", "PauseGame", g_pauseGame ? "1" : "0", INI_PATH);
             logger::info("Config pause(pill) -> {}", g_pauseGame);
             ReapplyPause();
+        } else if (key == "allactors") {
+            // Power-user escape hatch: union the local engine enumeration into the cast (see BuildNpcJson).
+            g_allActors.store(on);
+            WritePrivateProfileStringA("Behavior", "AllActors", on ? "1" : "0", INI_PATH);
+            logger::info("Config allActors -> {}", on);
+            PushData();  // rebuild the cast immediately so the toggle feels instant (don't wait for the 1 Hz poll)
         } else if (key == "typing") {
             // Text box gained/lost focus -- transient auto-pause so keystrokes
             // don't leak to other mods' hotkeys while composing a line.
@@ -2118,6 +2239,9 @@ namespace
         }
 
         LookupFactions();
+        if (auto* ui = RE::UI::GetSingleton()) {
+            ui->AddEventSink<RE::MenuOpenCloseEvent>(MenuWatch::GetSingleton());  // clear in-game at the main menu
+        }
         // bAlwaysRunByDefault lives in the PREFS collection (SkyrimPrefs.ini), not GetINISetting --
         // reading it from the wrong place was why the run/walk guard never fired.
         if (auto* prefs = RE::INIPrefSettingCollection::GetSingleton()) {
@@ -2131,6 +2255,12 @@ namespace
         g_pauseGame = ReadPauseGame();
         g_captureKeys = GetPrivateProfileIntA("Behavior", "CaptureKeys", 0, INI_PATH) != 0;
         logger::info("CaptureKeys={}", g_captureKeys);
+        g_allActors.store(GetPrivateProfileIntA("Behavior", "AllActors", 0, INI_PATH) != 0);
+        g_maxCast = GetPrivateProfileIntA("Behavior", "MaxCast", 50, INI_PATH);
+        if (g_maxCast < 1) {
+            g_maxCast = 1;
+        }
+        logger::info("AllActors={} MaxCast={}", g_allActors.load(), g_maxCast);
 
         g_view = g_prisma->CreateView("Playwright/index.html", [](PrismaView a_view) {
             logger::info("Playwright view DOM ready ({})", a_view);
@@ -2196,8 +2326,17 @@ namespace
 
     void SKSEMessageHandler(SKSE::MessagingInterface::Message* a_message)
     {
-        if (a_message->type == SKSE::MessagingInterface::kDataLoaded) {
+        switch (a_message->type) {
+        case SKSE::MessagingInterface::kDataLoaded:
             OnDataLoaded();
+            break;
+        case SKSE::MessagingInterface::kPostLoadGame:  // save loaded (Continue / Load)
+        case SKSE::MessagingInterface::kNewGame:       // new game started
+            g_inGame.store(true);
+            PushInterop("pwSetIngame", "1");           // reveal the persistent log now we're in the world
+            break;
+        default:
+            break;
         }
     }
 }

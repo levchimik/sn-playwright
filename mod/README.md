@@ -1,4 +1,4 @@
-# Playwright — v0.11.1
+# Playwright — v0.12.0
 
 ![Playwright — Direct the Scene](fomod/playwright.jpg)
 
@@ -44,6 +44,15 @@ crosshair aiming, multi-word names just work.
 > ordinary thoughts are byte-for-byte unchanged). Also fixes a focus bug where pressing
 > **Escape** with the panel open could leave input stuck and the game unpausable — Escape now
 > just closes the panel (press it again to open the pause menu).
+
+> **v0.12.0** adds **All actors** mode (⚙ Settings): list *every* loaded NPC nearby, not just
+> SkyrimNet's eligible cast — the generics and voiceless ones it filters out or hasn't profiled yet
+> show up (tinted **off-scene**) and are still puppetable (engaging one makes SkyrimNet profile it on
+> the fly). Plus a **persistent conversation log** (Settings, on by default) that stays on screen even
+> when the panel is collapsed to the dot. Fixes: **Tab now closes an NPC dialogue** with the panel open
+> (it no longer eats the key), the log no longer floats on the **main menu**, the cast list survives a
+> malformed actor entry (hardened JSON parsing) and shows up to 50 nearby (was 30), with a **stale**
+> warning if SkyrimNet stops responding.
 
 ## The As / To model
 

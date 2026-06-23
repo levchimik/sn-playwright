@@ -2,7 +2,7 @@
 <fomod>
     <Name>Playwright</Name>
     <Author>levchimik</Author>
-    <Version>0.11.1</Version>
+    <Version>0.12.0</Version>
     <Website>https://github.com/levchimik/sn-playwright</Website>
     <Description>A scene-control / NPC-puppeteering toolkit for SkyrimNet. Direct who is "in" a scene, narrate it, and put words, thoughts, and sleep into your cast from an on-screen, fully keyboard-drivable PrismaUI control panel.
 
