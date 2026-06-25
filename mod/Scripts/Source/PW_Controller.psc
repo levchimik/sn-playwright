@@ -133,6 +133,23 @@ Function RegisterKeys()
     If PrismaKey > 0
         RegisterForKey(PrismaKey)
     EndIf
+    PushKeyConfig()
+EndFunction
+
+; Mirror the panel-toggle binding to SNPlaywright.dll. The DLL needs it because, while the panel
+; is OPEN, its keyboard capture swallows the toggle key before this script's RegisterForKey sink
+; can see it -- so OnKeyDown can't fire to close the panel in normal gameplay (it only reaches us
+; over a vanilla dialogue, where the DLL yields the keyboard). With the binding, the DLL closes
+; the panel itself. Sent on every load and whenever the key/modifier is rebound (via RegisterKeys).
+; Packed as "prismaKey|modifierKey|requireModifier(0/1)".
+Function PushKeyConfig()
+    String cfg = (PrismaKey as String) + "|" + (ModifierKey as String) + "|"
+    If RequireModifier
+        cfg += "1"
+    Else
+        cfg += "0"
+    EndIf
+    SendModEvent("PW_PrismaKeys", cfg, 0.0)
 EndFunction
 
 Event OnKeyDown(Int keyCode)

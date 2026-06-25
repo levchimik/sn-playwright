@@ -56,6 +56,14 @@ namespace
     std::atomic<bool> g_inGame{false};       // a save is loaded / player is in the world (false at the main menu).
                                              // Gates the persistent conversation log so it doesn't float on the title screen.
     std::atomic<bool> g_lookMode{false};     // RMB held: panel temporarily unfocused so you can look + move
+    // Panel-toggle binding, mirrored from the MCM via the PW_PrismaKeys ModEvent. The DLL needs
+    // these so it can close the panel itself: while the panel is open its keyboard filter unlinks
+    // the toggle key before the script's RegisterForKey sink can fire, so Papyrus' OnKeyDown can
+    // never close it (see InputDispatchHook). -1 = not yet reported by Papyrus.
+    std::atomic<int>  g_prismaKey{-1};       // DXScanCode of the open/close key (default F11 = 0x57)
+    std::atomic<int>  g_modifierKey{-1};     // DXScanCode of the modifier (default LShift = 0x2A); <=0 = none
+    std::atomic<bool> g_requireModifier{true}; // if true the modifier must be held for the toggle to fire
+    std::atomic<bool> g_modHeld{false};      // live held-state of g_modifierKey (tracked off the input stream)
     RE::Setting*      g_alwaysRun = nullptr; // "bAlwaysRunByDefault:Controls" (cached) -- read for run/walk resync
     bool              g_appliedPause = false; // pause value currently in effect on the live view
     uint64_t          g_reapplyTick = 0;      // when we last ran an Unfocus->Focus cycle (loop guard)
@@ -1446,7 +1454,6 @@ namespace
         }
         const bool running = (runHeld != alwaysRun);  // XOR: with Always Run on, holding Run = walk
         if (pc->data.running != running) {
-            logger::info("DIAG resync run/walk: held={} alwaysRun={} -> running={}", runHeld, alwaysRun, running);
             pc->data.running = running;
         }
     }
@@ -1503,11 +1510,11 @@ namespace
         if (!g_prisma || !g_viewReady.load() || !g_prisma->IsValid(g_view)) {
             return;
         }
-        if (g_prisma->HasFocus(g_view)) {
-            if (auto* p = RE::PlayerCharacter::GetSingleton()) {
-                logger::info("DIAG panel CLOSE run={} walk={} alwaysRun={}",
-                             p->IsRunning(), p->IsWalking(), ReadAlwaysRun());
-            }
+        // Branch on the authoritative open flag, NOT HasFocus: when Playwright is opened over a
+        // vanilla menu (dialogue/journal), the menu keeps PrismaUI focus priority so HasFocus(g_view)
+        // stays false even though the panel is open -- which made the combo always re-take the OPEN
+        // branch and never close. g_panelOpen tracks the real expand/collapse state in every path.
+        if (g_panelOpen.load()) {
             g_typing = false;  // closing clears the transient typing-pause
             g_panelOpen.store(false);
             g_lookMode.store(false);
@@ -1515,10 +1522,6 @@ namespace
             GuardedUnfocus();
             g_prisma->InteropCall(g_view, "pwSetOpen", "0");  // collapse to dot
         } else {
-            if (auto* p = RE::PlayerCharacter::GetSingleton()) {
-                logger::info("DIAG panel OPEN pause={} run={} walk={} alwaysRun={}", EffectivePause(),
-                             p->IsRunning(), p->IsWalking(), ReadAlwaysRun());
-            }
             g_panelOpen.store(true);  // panel now owns keyboard (input hook filters non-typing keys)
             g_appliedPause = EffectivePause();
             GuardedFocus(g_appliedPause);
@@ -1544,6 +1547,23 @@ namespace
                 const std::string nm = a_event->eventName.c_str();
                 if (nm == "PW_PrismaToggle") {
                     SKSE::GetTaskInterface()->AddTask([]() { ToggleMenu(); });
+                } else if (nm == "PW_PrismaKeys") {
+                    // "prismaKey|modifierKey|requireModifier(0/1)" -- the MCM-bound toggle binding,
+                    // so the DLL can close the panel directly while its keyboard filter is active.
+                    const std::string s = a_event->strArg.c_str();
+                    const auto p1 = s.find('|');
+                    const auto p2 = (p1 == std::string::npos) ? std::string::npos : s.find('|', p1 + 1);
+                    if (p1 != std::string::npos && p2 != std::string::npos) {
+                        try {
+                            g_prismaKey.store(std::stoi(s.substr(0, p1)));
+                            g_modifierKey.store(std::stoi(s.substr(p1 + 1, p2 - p1 - 1)));
+                            g_requireModifier.store(s.substr(p2 + 1) == "1");
+                            logger::info("Toggle binding: key={:#x} mod={:#x} requireMod={}",
+                                         g_prismaKey.load(), g_modifierKey.load(), g_requireModifier.load());
+                        } catch (...) {
+                            logger::warn("PW_PrismaKeys: bad payload '{}'", s);
+                        }
+                    }
                 } else if (nm == "PW_PrismaDirector") {
                     PushDirector(a_event->numArg >= 0.5f);  // recording dot on/off
                 } else if (nm == "PW_PrismaStat") {
@@ -1583,20 +1603,6 @@ namespace
         MenuWatch() = default;
     };
 
-    void CollapseFromCode()  // close the panel from C++ (main thread)
-    {
-        SKSE::GetTaskInterface()->AddTask([]() {
-            if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
-                g_typing = false;
-                g_panelOpen.store(false);
-                g_lookMode.store(false);
-                g_appliedPause = false;
-                GuardedUnfocus();
-                g_prisma->InteropCall(g_view, "pwSetOpen", "0");
-            }
-        });
-    }
-
     // ---- Escape handling ----
     // PrismaUI views don't get Escape on their own (the game claims it), so we
     // watch the raw input stream while the panel is focused. Observe-only: if
@@ -1633,9 +1639,11 @@ namespace
                                 g_prisma->InteropCall(g_view, "pwBlurText", "");
                             }
                         });
-                    } else {
-                        CollapseFromCode();
                     }
+                    // When not typing, Escape no longer closes the panel -- it falls through to the
+                    // game so it can exit a dialogue / toggle the pause menu. This keeps Playwright
+                    // from ever Unfocusing over an open menu (the PrismaUI input-capture leak). Close
+                    // Playwright with its toggle combo or the X button instead.
                 }
             }
             return RE::BSEventNotifyControl::kContinue;
@@ -1660,7 +1668,8 @@ namespace
     // Gating: only filter when the panel is expanded/focused AND the text box is NOT focused.
     // While typing, PrismaUI's focus menu already routes keys into the field, so we leave the
     // list untouched (filtering it would break typing, since our detour runs before the menu
-    // sink). Escape (DIK 0x01) is always whitelisted so EscInputSink can still close the panel.
+    // sink). Escape (DIK 0x01) is handled separately in the dispatch hook (block 1b), which
+    // consumes it while the panel is focused (exit the text box if typing, otherwise no-op).
     //
     // RMB "look/move" mode: holding right mouse while the panel is open momentarily Unfocuses
     // the view (kept SHOWN) so the game restores mouselook + WASD movement -- reposition for the
@@ -1709,8 +1718,8 @@ namespace
         static inline bool g_owned[256] = {};
         static inline bool g_wasFiltering = false;
 
-        // Normal mode keyboard suppression (stateful -- see g_owned). Escape is always passed so
-        // EscInputSink can close the panel.
+        // Normal mode keyboard suppression (stateful -- see g_owned). Escape is left in the list
+        // here; the dispatch hook's block 1b decides whether to consume it.
         static void FilterKeyboard(RE::InputEvent** a_evns)
         {
             if (!a_evns) {
@@ -1764,6 +1773,13 @@ namespace
         static bool DropEscape(RE::ButtonEvent* be)
         {
             return be->GetDevice() == RE::INPUT_DEVICE::kKeyboard && be->GetIDCode() == 0x01 /* DIK_ESCAPE */;
+        }
+        // The configured panel-toggle key, swallowed when the DLL handles the close itself (so it
+        // can't ALSO leak to gameplay or be double-processed by the nav/filter passes below).
+        static bool DropPrismaKey(RE::ButtonEvent* be)
+        {
+            return be->GetDevice() == RE::INPUT_DEVICE::kKeyboard &&
+                   g_prismaKey.load() > 0 && be->GetIDCode() == (std::uint32_t)g_prismaKey.load();
         }
 
         // The panel's keyboard keys (DirectInput scancodes). Returns the JS name the view's
@@ -1849,7 +1865,6 @@ namespace
         static void EnterLook()
         {
             g_lookMode.store(true);  // flip immediately so this frame stops filtering keyboard
-            logger::info("DIAG lookMode ENTER (Unfocus)");
             SKSE::GetTaskInterface()->AddTask([]() {
                 if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view) &&
                     g_prisma->HasFocus(g_view)) {
@@ -1860,7 +1875,6 @@ namespace
         static void ExitLook()
         {
             g_lookMode.store(false);
-            logger::info("DIAG lookMode EXIT (Focus)");
             SKSE::GetTaskInterface()->AddTask([]() {
                 if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view) &&
                     g_panelOpen.load() && !g_prisma->HasFocus(g_view)) {
@@ -1903,6 +1917,40 @@ namespace
                     }
                 }
             }
+            // 1a) Panel-toggle key: track the modifier's held state every frame, and when the panel
+            //     is OPEN drive the close from here. While open, FilterKeyboard (step 3) unlinks the
+            //     toggle key before the script's RegisterForKey sink can fire, so Papyrus' OnKeyDown
+            //     can't close the panel in normal gameplay (it only works over a dialogue, where the
+            //     filter is disabled). So we recognise the configured key ourselves -- modifier-gated
+            //     to match the MCM -- toggle, and swallow it. Opening still flows through Papyrus: the
+            //     panel is closed then, the filter is off, and the key reaches OnKeyDown as before.
+            if (a_evns && g_prismaKey.load() > 0) {
+                bool togglePressed = false;
+                for (auto* e = *a_evns; e; e = e->next) {
+                    if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) {
+                        continue;
+                    }
+                    auto* be = e->AsButtonEvent();
+                    if (!be || be->GetDevice() != RE::INPUT_DEVICE::kKeyboard) {
+                        continue;
+                    }
+                    const std::uint32_t sc = be->GetIDCode();
+                    if (g_modifierKey.load() > 0 && sc == (std::uint32_t)g_modifierKey.load()) {
+                        g_modHeld.store(!be->IsUp());  // persists across frames; updated whenever seen
+                    }
+                    if (sc == (std::uint32_t)g_prismaKey.load() && be->IsDown()) {
+                        togglePressed = true;
+                    }
+                }
+                if (togglePressed && g_panelOpen.load() && !g_typing.load()) {
+                    const bool modOk = !g_requireModifier.load() || g_modifierKey.load() <= 0 ||
+                                       g_modHeld.load();
+                    if (modOk) {
+                        SKSE::GetTaskInterface()->AddTask([]() { ToggleMenu(); });
+                        Unlink(a_evns, &DropPrismaKey);
+                    }
+                }
+            }
             // 1b) Escape while the panel owns focus: exit the text box (if typing) else close the
             //     panel, and DROP the key here so it can't ALSO reach MenuControls and open the
             //     pause/journal menu underneath. A BSTEventSink can't block input, so the old
@@ -1926,14 +1974,17 @@ namespace
                 if (escDown && g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view) &&
                     g_prisma->HasFocus(g_view)) {
                     if (g_typing.load()) {
+                        // Typing: Escape exits the text box (the view blurs + unpauses).
                         SKSE::GetTaskInterface()->AddTask([]() {
                             if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
                                 g_prisma->InteropCall(g_view, "pwBlurText", "");
                             }
                         });
-                    } else {
-                        CollapseFromCode();
                     }
+                    // While the panel is focused, Escape is consumed and does nothing else: it neither
+                    // closes the panel nor reaches the game (no pause menu, no dialogue exit). Dropping
+                    // it here means Playwright never Unfocuses over a menu via Escape -- so the PrismaUI
+                    // input-capture leak can't fire. Close the panel with its toggle combo or the X.
                     Unlink(a_evns, &DropEscape);
                 }
             }
