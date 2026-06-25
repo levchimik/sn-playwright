@@ -2556,7 +2556,10 @@
           if(nav.log>=0 && nav.log<drows.length && drows[nav.log]._pwDelete){
             drows[nav.log]._pwDelete();
             var after=logRows();
-            if(after.length) focusLog(clamp(nav.log-1,0,after.length-1)); else nav.log=-1;
+            // Land on the newest message, same as the → button. Latch _focusLatestOnLoad
+            // so the post-delete poll rebuild (pwSetLog) re-snaps to the true last row
+            // instead of re-applying the old nav.log index.
+            if(after.length){ focusLog(after.length-1); nav._focusLatestOnLoad=true; } else nav.log=-1;
           }
         } else { clearPairing(); }                         // cast: clear speaker/target badges
         return;
