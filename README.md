@@ -1,4 +1,4 @@
-# Playwright — v0.12.1-rc1
+# Playwright — v0.12.1
 
 ![Playwright — Direct the Scene](mod/fomod/playwright.jpg)
 
@@ -222,3 +222,20 @@ longer required** as of v0.8 (thought-event JSON is now escaped by an inline hel
   compose, etc.) don't also trigger other mods' hotkeys; **Escape** and **right-mouse
   look** still pass through. Toggle this with `SNPlaywright.ini` → `[Behavior]
   CaptureKeys` (read at game launch, so restart to apply).
+
+## Building a release (maintainer)
+
+`mod/` **is** the FOMOD — its `mod/fomod/ModuleConfig.xml` maps onto the flat layout.
+Package it with the tool, which validates the payload and writes a spec-compliant zip:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/pack-fomod.ps1          # build dist/Playwright-<ver>-fomod.zip
+powershell -ExecutionPolicy Bypass -File tools/pack-fomod.ps1 -Check    # validate only, no zip
+powershell -ExecutionPolicy Bypass -File tools/pack-fomod.ps1 -Upload   # build + replace the matching release asset
+```
+
+Version comes from `mod/fomod/info.xml`. The script **fails loud** if the DLL in `mod/`
+isn't the freshly-built one, a `.pex` is older than its `.psc`, a `ModuleConfig`-referenced
+file is missing, or the zip would contain backslash separators. **Do not** zip `mod/` with
+`Compress-Archive` or build from `dist/Playwright-FOMOD/` (abandoned, stale) — both ship a
+broken/old installer. `dist/` is gitignored build output.
