@@ -1603,55 +1603,9 @@ namespace
         MenuWatch() = default;
     };
 
-    // ---- Escape handling ----
-    // PrismaUI views don't get Escape on their own (the game claims it), so we
-    // watch the raw input stream while the panel is focused. Observe-only: if
-    // typing, the first Escape just exits the text box (via the view); otherwise
-    // it closes the panel.
-    class EscInputSink : public RE::BSTEventSink<RE::InputEvent*>
-    {
-    public:
-        static EscInputSink* GetSingleton()
-        {
-            static EscInputSink instance;
-            return &instance;
-        }
-        RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_events,
-                                              RE::BSTEventSource<RE::InputEvent*>*) override
-        {
-            if (!a_events || !g_prisma || !g_viewReady.load() || !g_prisma->IsValid(g_view) ||
-                !g_prisma->HasFocus(g_view)) {
-                return RE::BSEventNotifyControl::kContinue;
-            }
-            for (auto* e = *a_events; e; e = e->next) {
-                if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) {
-                    continue;
-                }
-                auto* be = e->AsButtonEvent();
-                if (!be || be->device.get() != RE::INPUT_DEVICE::kKeyboard) {
-                    continue;
-                }
-                if (be->GetIDCode() == 0x01 /* DIK_ESCAPE */ && be->IsDown()) {
-                    if (g_typing) {
-                        // First Escape: exit the text box (the view blurs + unpauses).
-                        SKSE::GetTaskInterface()->AddTask([]() {
-                            if (g_prisma && g_viewReady.load() && g_prisma->IsValid(g_view)) {
-                                g_prisma->InteropCall(g_view, "pwBlurText", "");
-                            }
-                        });
-                    }
-                    // When not typing, Escape no longer closes the panel -- it falls through to the
-                    // game so it can exit a dialogue / toggle the pause menu. This keeps Playwright
-                    // from ever Unfocusing over an open menu (the PrismaUI input-capture leak). Close
-                    // Playwright with its toggle combo or the X button instead.
-                }
-            }
-            return RE::BSEventNotifyControl::kContinue;
-        }
-
-    private:
-        EscInputSink() = default;
-    };
+    // Escape handling lives entirely in the input-dispatch hook (block 1b): a BSTEventSink can't
+    // remove the key from the list, so it could never stop Escape from ALSO opening the pause/journal
+    // menu underneath. The hook unlinks it instead -- see InputDispatchHook::Dispatch.
 
     // ---- Input-dispatch hook: steal keys from other consumers while the panel owns input ----
     //
@@ -1951,13 +1905,14 @@ namespace
                     }
                 }
             }
-            // 1b) Escape while the panel owns focus: exit the text box (if typing) else close the
-            //     panel, and DROP the key here so it can't ALSO reach MenuControls and open the
-            //     pause/journal menu underneath. A BSTEventSink can't block input, so the old
-            //     EscInputSink collapsed the panel but the same Escape still opened the journal --
-            //     the two raced and left input dead with the game stuck paused. Unlinking it in the
-            //     dispatch hook (before any sink) is the only way to actually suppress it. Gated on
-            //     HasFocus (what EscInputSink used), so it supersedes that sink cleanly.
+            // 1b) Escape while the panel owns focus: exit the text box (if typing), and DROP the key
+            //     here so it can't reach MenuControls and open the pause/journal menu underneath. A
+            //     BSTEventSink can't block input -- it would collapse the panel but the same Escape
+            //     would still open the journal, the two racing and leaving input dead with the game
+            //     stuck paused. Unlinking it in the dispatch hook (before any sink) is the only way to
+            //     actually suppress it. Gated on HasFocus so it only fires when the panel really owns
+            //     input. Escape never closes the panel (that would Unfocus over a menu and trip the
+            //     PrismaUI input-capture leak); use the toggle combo or the X button.
             if (a_evns) {
                 bool escDown = false;
                 for (auto* e = *a_evns; e; e = e->next) {
@@ -2361,12 +2316,9 @@ namespace
 
         // Watch raw input for Escape while the panel is focused (the game claims
         // Escape, so the view can't see it on its own).
-        if (auto* idm = RE::BSInputDeviceManager::GetSingleton()) {
-            idm->AddEventSink(EscInputSink::GetSingleton());
-        }
-
         // Hook the input dispatch so the panel can steal keys from other mods/vanilla while
-        // open-and-not-typing (a plain sink can't -- see InputDispatchHook).
+        // open-and-not-typing (a plain sink can't -- see InputDispatchHook). This also handles
+        // Escape and the panel-toggle key.
         InputDispatchHook::Install();
 
         // 1 Hz cast-list refresh while open + unpaused (keeps the list current as you reposition).
